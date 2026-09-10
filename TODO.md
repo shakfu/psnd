@@ -48,7 +48,7 @@ Findings from `REVIEW.md` (2026-08-24), re-verified against the tree. Ordered by
 
   - `prefix[REPL_MAX_INPUT_LENGTH]` was 1024 bytes while linenoise hands the callback a `LINENOISE_MAX_LINE` (4096) buffer. When `word_len >= 1024` the `memcpy` was skipped but `prefix[word_len] = '\0'` still executed, writing up to ~3KB past the buffer. Reachable in the default build (`WITH_LINENOISE` defaults `ON`) with no auth and no opt-in flag.
 
-  - Extracted `repl_extract_completion_prefix()` (`loki/repl.h`, `loki/repl_line_editor.c`) as a bounds-checked, testable seam. It returns -1 when the word plus terminator does not fit and the adapter skips completion - correct rather than truncating, since such a word would not survive `repl_readline()`'s truncation into `ReplLineEditor.buf` anyway.
+  - Extracted `repl_extract_completion_prefix()` (`loki/repl.h`, `loki/repl_line_editor.c`) as a bounds-checked, testable layer. It returns -1 when the word plus terminator does not fit and the adapter skips completion - correct rather than truncating, since such a word would not survive `repl_readline()`'s truncation into `ReplLineEditor.buf` anyway.
 
   - `test_repl_line_editor.c`: 17 tests, guard-byte buffers around the output. Verified the four boundary tests fail against the pre-fix logic.
 
@@ -412,7 +412,7 @@ Current state (recounted 2026-08-24): **77 first-party test files** (90 tree-wid
 
 - [ ] Web/host layer - `host.c`, `host_web.c`, `session.c`, `event.c`
 
-  - `host.h` already defines the `EditorHost` / `EditorSession` seam these need, so a queue-backed test host is the natural harness. Nothing exercises it today.
+  - `host.h` already defines the `EditorHost` / `EditorSession` layer these need, so a queue-backed test host is the natural harness. Nothing exercises it today.
 
   - `host_web.c` is the only network-facing file in the project and now carries access-control logic that should not regress silently: cover token accept/reject, cross-origin rejection, and the loopback-by-default bind.
 
@@ -562,7 +562,7 @@ Current state (recounted 2026-08-24): **77 first-party test files** (90 tree-wid
 
   - `docs/design_review.md` (13 hits) and `docs/refactor.md` (41 hits) still cite pre-rename paths `src/loki/...` and `src/shared/...`, now `source/core/loki/...` and `source/core/shared/...`, with `terminal.c` split into `terminal_posix.c` / `terminal_win.c`.
 
-  - More misleading than the paths: both still present the model/view split and the host/session seam as future work. Both landed. Reviewers reading these docs reach wrong conclusions about the code - `REVIEW.md` did exactly that.
+  - More misleading than the paths: both still present the model/view split and the host/session layer as future work. Both landed. Reviewers reading these docs reach wrong conclusions about the code - `REVIEW.md` did exactly that.
 
 - [x] ~~README build-table fixes~~ **DONE**
 
@@ -648,9 +648,9 @@ Current state (recounted 2026-08-24): **77 first-party test files** (90 tree-wid
 
 - [ ] Route the terminal path through the existing host abstraction
 
-  - Scoped down from `REVIEW.md` recommendation 4, most of which is already done: `internal.h:143-236` splits `EditorModel` (document) from `EditorView` (presentation) inside `editor_ctx`, and `host.h` / `session.h` already define the `EditorHost` / `EditorSession` seam that the web and webview hosts use.
+  - Scoped down from `REVIEW.md` recommendation 4, most of which is already done: `internal.h:143-236` splits `EditorModel` (document) from `EditorView` (presentation) inside `editor_ctx`, and `host.h` / `session.h` already define the `EditorHost` / `EditorSession` layer that the web and webview hosts use.
 
-  - What is actually left: `loki_editor_main` (`editor.c:317-660`) still runs its own `while(1)` against `STDIN_FILENO` and calls `editor_refresh_screen` directly, bypassing that seam. Moving it onto `EditorHost` would leave one loop instead of two and make the terminal path testable like the others.
+  - What is actually left: `loki_editor_main` (`editor.c:317-660`) still runs its own `while(1)` against `STDIN_FILENO` and calls `editor_refresh_screen` directly, bypassing that layer. Moving it onto `EditorHost` would leave one loop instead of two and make the terminal path testable like the others.
 
   - The design docs oversell this: `docs/design_review.md` and `docs/refactor.md` still describe the pre-split code and pre-rename paths (see Documentation).
 

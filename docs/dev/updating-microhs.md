@@ -226,7 +226,7 @@ and psnd drops the `-o` feature.
 ### Caveats
 
 - **Undocumented.** No README coverage. Not used by upstream's own Makefile or
-  `Makefile.packages`. It is a facility, not a load-bearing part of upstream's build,
+  `Makefile.packages`. It is a facility, not a structural part of upstream's build,
   so it carries less real-world testing than the rest of the compiler.
 - **Version lockstep.** `loadPkg'` errors on `pkgCompiler pkg /= mhsVersion`
   (`Compile.hs:540`). psnd builds both from one tree, so this is automatic, but it rules
