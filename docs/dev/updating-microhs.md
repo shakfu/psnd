@@ -60,6 +60,14 @@ the packages, and those are already in it.
 `WANT_OVERFLOW`, the other suspect, costs about 7% (2.38s -> 2.21s with it off),
 and `-O2` versus `-O3` costs nothing (2.16s versus 2.14s).
 
+## Local patches
+
+`source/langs/mhs/patches/` carries fixes not yet upstream; the build applies
+them to a copy of the vendored tree and rebuilds the compiler from it. Each one
+has to be re-checked against the new tree on a bump, and a patch that no longer
+applies fails the build rather than landing somewhere else. See that
+directory's README.
+
 ## Version facts
 
 There is no MicroHs 0.17.0.

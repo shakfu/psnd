@@ -1,0 +1,77 @@
+Run an IO action that returns a value, instead of refusing to show it
+
+At the prompt, an expression of type IO Bool or IO Int fails:
+
+  > return True :: IO Bool
+  *** Exception: error: no location: Cannot satisfy constraint: Show (IO Bool)
+
+PrintOrRun has an instance for IO () and one for Show a, and IO Bool matches
+neither. The instance that would cover it is commented out in
+lib/System/IO/PrintOrRun.hs with "Resolution of overlapping instances is not
+good enough for this. Yet." I tried enabling it against 0.16.5.0: the library
+builds, but the prompt then reports "Multiple constraint solutions for:
+PrintOrRun (IO Bool)", so that route is still closed.
+
+This takes the other one. When compiling `_printOrRun it` fails with what looks
+like that constraint, the line is compiled a second time as `(it) >>= print`.
+If the retry also fails, the first error is reported, so a genuine type error
+is unaffected. The cost is one extra compile of a line that was going to fail
+anyway.
+
+Behaviour against stock 0.16.5.0, same session:
+
+  input                      stock                      patched
+  y = 5; y*2                 10                         10
+  putStrLn "x"               x                          x
+  6*7                        42                         42
+  "a string"                 "a string"                 "a string"
+  mapM_ print [1,2::Int]     1 2                        1 2
+  True + 1                   Cannot satisfy Num Bool    Cannot satisfy Num Bool
+  nosuchname                 undefined value            undefined value
+  return True :: IO Bool     Cannot satisfy Show (IO Bool)   True
+  return (6*7) :: IO Int     Cannot satisfy Show (IO Int)    42
+
+The predicate reads the error message, which is the same approach parseError
+already takes a few lines below, and which its XXX comment already says
+deserves a real exception type. If you would rather have one, say so and I will
+follow whatever shape you pick.
+
+--- a/src/MicroHs/Interactive.hs
++++ b/src/MicroHs/Interactive.hs
+@@ -295,6 +295,16 @@
+ mkTypeIt l =
+   "type " ++ itTypeName ++ " = " ++ l ++ "\n"
+ 
++-- Does the failure say the expression is an IO action with a result? The
++-- constraint is only available as a message, like the file and line that
++-- parseError picks out below.
++isIOResult :: SomeException -> Bool
++isIOResult e =
++  let msg = displayException e
++  in  isInfixOf "PrintOrRun" msg ||
++      (isInfixOf "Cannot satisfy constraint" msg && isInfixOf "Show (" msg &&
++       (isInfixOf "IO " msg || isInfixOf "Primitives.IO" msg))
++
+ err :: SomeException -> I ()
+ err e = do
+   let msg = displayException e
+@@ -340,7 +350,18 @@
+             when (stats) $
+               liftIO $ putStrLn $ "total " ++ show (t2 - t1) ++ "ms"
+ -}
+-          Left  e -> err e
++          Left  e ->
++            -- An IO action that returns a value satisfies neither PrintOrRun
++            -- instance: one is for IO (), the other needs Show, and there is
++            -- no Show for IO. Run it and print the result, which is what was
++            -- meant. Keep the first error if that does not compile either.
++            if isIOResult e then do
++              retryTest <- tryCompile (ls ++ "\n" ++ mkItIO flgs stats ("(" ++ line ++ ") >>= print"))
++              case retryTest of
++                Right (m, _) -> evalExpr m
++                Left _       -> err e
++             else
++              err e
+   -- A small hack, if we import something we have already imported
+   -- in exactly the same way, we just reload instead.  This is to avoid
+   -- building up multiple imports.

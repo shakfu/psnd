@@ -78,6 +78,24 @@ message(STATUS "MHS: vendored MicroHs version ${MHS_VERSION}")
 set(MIDI_LIB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/lib)
 set(EXAMPLES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/examples)
 
+# patches/ holds fixes to MicroHs that psnd needs before upstream takes them.
+# Applying them means rebuilding the compiler from the vendored sources rather
+# than linking upstream's committed generated/mhs.c. patches/README.md says
+# what each one is for.
+option(MHS_PATCH_MHS "Rebuild the compiler with source/langs/mhs/patches applied" ON)
+file(GLOB MHS_PATCH_FILES ${CMAKE_CURRENT_SOURCE_DIR}/patches/*.diff)
+list(SORT MHS_PATCH_FILES)
+if(MHS_PATCH_MHS AND MHS_PATCH_FILES)
+    find_program(PATCH_EXECUTABLE patch)
+    if(NOT PATCH_EXECUTABLE)
+        message(FATAL_ERROR
+            "MHS: patch(1) not found, needed for source/langs/mhs/patches. "
+            "Configure with -DMHS_PATCH_MHS=OFF to build without them.")
+    endif()
+    list(LENGTH MHS_PATCH_FILES MHS_PATCH_COUNT)
+    message(STATUS "MHS: applying ${MHS_PATCH_COUNT} local patch(es), compiler rebuilt from source")
+endif()
+
 # Build MicroHs compiler if it doesn't exist
 if(NOT EXISTS ${MHS_COMPILER})
     message(STATUS "Building MicroHs compiler...")
@@ -193,16 +211,60 @@ endif()
 # Generate patched sources for VFS-based psnd integration
 # ==============================================================================
 
-# Create patched mhs.c (removes xffi_table for custom FFI)
-add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/mhs_psnd.c
-    COMMAND ${Python3_EXECUTABLE} ${MHS_SCRIPTS_DIR}/mhs-patch-xffi.py
-            ${MHS_DIR}/generated/mhs.c
+# Create patched mhs.c (removes xffi_table for custom FFI).
+#
+# With local patches, the compiler program is rebuilt first: the vendored tree
+# is copied, the patches are applied to the copy, and bin/mhs compiles
+# MicroHs.Main from it. The vendored tree is never modified. That costs one
+# self-compile, ~40s, and reruns only when a patch or bin/mhs changes.
+#
+# Every step belongs to one rule. A shared intermediate consumed by two targets
+# is what makes the Makefile generator duplicate a recipe and run it twice
+# under -j.
+if(MHS_PATCH_MHS AND MHS_PATCH_FILES)
+    set(MHS_PATCHED_DIR ${CMAKE_CURRENT_BINARY_DIR}/mhs-patched)
+    set(MHS_SELF_COMPILED_C ${CMAKE_CURRENT_BINARY_DIR}/mhs_selfcompiled.c)
+
+    # -F0 so a patch whose context drifted after a version bump fails the build
+    # instead of landing somewhere else; -N -t so nothing is applied in reverse
+    # and nothing waits for an answer on a terminal.
+    set(MHS_APPLY_COMMANDS)
+    foreach(patch_file ${MHS_PATCH_FILES})
+        list(APPEND MHS_APPLY_COMMANDS
+            COMMAND ${PATCH_EXECUTABLE} -p1 -s -N -t -F0 -d ${MHS_PATCHED_DIR} -i ${patch_file})
+    endforeach()
+
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/mhs_psnd.c
+        BYPRODUCTS ${MHS_SELF_COMPILED_C}
+        COMMAND ${CMAKE_COMMAND} -E rm -rf ${MHS_PATCHED_DIR}
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${MHS_DIR} ${MHS_PATCHED_DIR}
+        ${MHS_APPLY_COMMANDS}
+        # chdir per step: the rule's own working directory would have to exist
+        # before the copy above creates it.
+        COMMAND ${CMAKE_COMMAND} -E chdir ${MHS_PATCHED_DIR}
+            ${CMAKE_COMMAND} -E env "MHSDIR=${MHS_PATCHED_DIR}"
+            ${MHS_COMPILER} -z -i -imhs -isrc -ilib
+            MicroHs.Main -o ${MHS_SELF_COMPILED_C}
+        COMMAND ${Python3_EXECUTABLE} ${MHS_SCRIPTS_DIR}/mhs-patch-xffi.py
+            ${MHS_SELF_COMPILED_C}
             ${CMAKE_CURRENT_BINARY_DIR}/mhs_psnd.c
-    DEPENDS ${MHS_DIR}/generated/mhs.c ${MHS_SCRIPTS_DIR}/mhs-patch-xffi.py
-    COMMENT "Creating mhs_psnd.c with xffi_table removed"
-    VERBATIM
-)
+        DEPENDS ${MHS_COMPILER} ${MHS_PATCH_FILES} ${MHS_SCRIPTS_DIR}/mhs-patch-xffi.py
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        COMMENT "Rebuilding mhs from patched sources, then removing xffi_table"
+        VERBATIM
+    )
+else()
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/mhs_psnd.c
+        COMMAND ${Python3_EXECUTABLE} ${MHS_SCRIPTS_DIR}/mhs-patch-xffi.py
+                ${MHS_DIR}/generated/mhs.c
+                ${CMAKE_CURRENT_BINARY_DIR}/mhs_psnd.c
+        DEPENDS ${MHS_DIR}/generated/mhs.c ${MHS_SCRIPTS_DIR}/mhs-patch-xffi.py
+        COMMENT "Creating mhs_psnd.c with xffi_table removed"
+        VERBATIM
+    )
+endif()
 
 # Create patched eval.c (VFS override plus the mmalloc rename Csound requires)
 add_custom_command(

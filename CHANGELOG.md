@@ -22,7 +22,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.3.0]
+
 ### Fixed
+
+- **MHS REPL Echoed Every Line Twice And Printed Results Late**: psnd's editor draws the line, then writes it into the PTY, where the terminal driver echoes it back and psnd printed that too. Output was also collected after a fixed 100ms sleep rather than read until MicroHs prompted again, so a result slower than that -- `midiInit` opening CoreMIDI, for one -- appeared under the *next* prompt, and the echo split across reads showed up as lines missing their first character. psnd now matches the echo against what it just sent and drops it, and drains the PTY until the prompt returns or 5s pass, so a result lands under the line that produced it (`repl.c`)
 
 - **Schedule Growth Ignored `realloc` Failure**: `schedule_grow()` assigned the result of `realloc()` straight to `sched->events` and raised `capacity` whether or not the allocation succeeded, so a failed grow lost the existing buffer and the caller then wrote an event through a null pointer. It now grows through a temporary, rejects a capacity whose byte size would overflow `size_t`, and reports failure; all thirteen scheduling entry points drop the event instead of writing past the buffer (`shared_async.c`)
 
@@ -43,6 +47,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 - **Vendored MicroHs 0.15.0.0 -> 0.16.5.0**: 553 upstream commits. The predicted blocker, 0.16's `getPaths` returning no package directory when `MHSDIR` is set, does not apply: `-a` fills `pkgPaths` independently and psnd already passes it. What the bump did need was `mhs.conf`, renamed from `targets.conf` upstream and now fatal rather than advisory on the compile-to-executable path, so `mhs-embed` gained `--conf` and serves it from the virtual root. Compilation itself is unchanged: the same six modules compile to C in 1.44s under 0.15.0.0 and 1.42s under 0.16.5.0, a three-line module in 0.50s under both, and a warm run that only reads the cache is 0.28s against 0.30s. What did change is the cache write, 0.71s against 1.88s, because 0.16 compresses `.mhscache` with LZMA rather than LZ77; the file is smaller for it, 730,587 bytes against 1,324,707. A cold `psnd mhs -r` pays that write once and went 2.77s -> 5.62s, while the warm path is faster than either version was, for the reasons in the two entries above. `docs/dev/updating-microhs.md` records the measurements and why Path A was taken over adopting upstream `--embed-packages` (`source/thirdparty/MicroHs`, `mhs-embed.c`, `langs/mhs/CMakeLists.txt`)
 
 ### Added
+
+- **Local Patches To Vendored MicroHs, Applied At Build Time**: `source/langs/mhs/patches/` holds fixes psnd needs before upstream takes them, with a README saying what each one is for. The build copies the vendored tree, patches the copy, and rebuilds the compiler from it with `bin/mhs`, so `source/thirdparty/MicroHs` is never modified. The first patch makes the REPL run an `IO` action that returns a value instead of refusing it: `midiInit` at the prompt reported `Cannot satisfy constraint: Show (IO Bool)`, as did `midiListPorts`, `midiIsOpen`, `midiRandom` and the three record queries. Cost is one 39.7s self-compile, cached until a patch or `bin/mhs` changes; `-DMHS_PATCH_MHS=OFF` builds against upstream's committed `generated/mhs.c` (`langs/mhs/CMakeLists.txt`, `patches/`)
 
 - **Third-Party License Texts In Release Archives**: `docs/licenses/` holds the license text of each vendored dependency, and `build_release.py` copies it into every archive, failing if the directory is absent. Archives carried only psnd's own `LICENSE` while the binaries link LGPL (Csound, FluidSynth, libsndfile, liblo) and GPL-2.0 (Ableton Link) code. zstd and JUCE ship no text in-tree and the mongoose GPL-2.0-only conflict still blocks the web variants; `docs/licenses/README.md` records both gaps (`build_release.py`)
 

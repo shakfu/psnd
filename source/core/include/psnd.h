@@ -16,7 +16,7 @@
  * single source of truth). This literal is only a fallback for non-CMake or
  * IDE builds; keep it in sync with CMakeLists.txt. */
 #ifndef PSND_VERSION
-#define PSND_VERSION        "0.2.2"
+#define PSND_VERSION        "0.3.0"
 #endif
 
 /* Configuration */

@@ -63,6 +63,9 @@
 /* Delay before REPL starts */
 #define MHS_REPL_DELAY 30000
 
+/* How long one input line may take before psnd prompts again anyway */
+#define MHS_OUTPUT_TIMEOUT_MS 5000
+
 /* SharedContext integration for TSF/Csound/Link support */
 #ifdef PSND_SHARED_CONTEXT
 #include "shared/context.h"
@@ -524,11 +527,26 @@ static int mhs_child_running(void) {
  *
  * Reads and prints any output from MicroHs to stdout.
  */
-static void mhs_read_output(void) {
-    if (g_mhs_pty_master < 0) return;
+/* What psnd last sent to the child, including the line ending the driver adds.
+   The child's terminal echoes it back and psnd's editor has already drawn it,
+   so mhs_pump_output() matches this and drops it rather than printing a second
+   copy. */
+static char g_echo_pending[1024];
+static size_t g_echo_pos;
+
+static void mhs_expect_echo(const char *line) {
+    snprintf(g_echo_pending, sizeof(g_echo_pending), "%s\r\n", line);
+    g_echo_pos = 0;
+}
+
+/* Read whatever the child has written. Returns 1 if its prompt came with it,
+   which is how the caller knows the line is finished. */
+static int mhs_pump_output(void) {
+    if (g_mhs_pty_master < 0) return 0;
 
     char buf[1024];
     ssize_t n;
+    int prompted = 0;
 
     /* Set non-blocking temporarily */
     int flags = fcntl(g_mhs_pty_master, F_GETFL, 0);
@@ -536,13 +554,26 @@ static void mhs_read_output(void) {
 
     while ((n = read(g_mhs_pty_master, buf, sizeof(buf) - 1)) > 0) {
         buf[n] = '\0';
-        /* Filter out MicroHs prompt since we show our own */
         char *p = buf;
         while (*p) {
-            /* Skip "> " prompt from MicroHs */
+            /* Skip "> " prompt from MicroHs, we show our own */
             if (p[0] == '>' && p[1] == ' ') {
+                prompted = 1;
                 p += 2;
                 continue;
+            }
+            /* The terminal driver echoes the line psnd wrote into the PTY, and
+               psnd's editor has already drawn it. The echo can arrive split
+               across reads, so match it one character at a time; on a mismatch
+               stop expecting it and print from there. */
+            if (g_echo_pending[g_echo_pos] != '\0') {
+                if (*p == g_echo_pending[g_echo_pos]) {
+                    g_echo_pos++;
+                    p++;
+                    continue;
+                }
+                g_echo_pending[0] = '\0';
+                g_echo_pos = 0;
             }
             putchar(*p++);
         }
@@ -551,6 +582,30 @@ static void mhs_read_output(void) {
 
     /* Restore blocking mode */
     fcntl(g_mhs_pty_master, F_SETFL, flags);
+    return prompted;
+}
+
+static void mhs_read_output(void) {
+    mhs_pump_output();
+}
+
+/* Print the child's output until it prompts again, so a result lands under the
+   line that produced it. The cap is for a line that runs long, such as one
+   playing a sequence: output left over is picked up on the next pass. */
+static void mhs_drain_output(int timeout_ms) {
+    if (g_mhs_pty_master < 0) return;
+
+    for (int waited = 0; waited < timeout_ms; waited += 10) {
+        fd_set fds;
+        struct timeval tv = {0, 10 * 1000};
+        FD_ZERO(&fds);
+        FD_SET(g_mhs_pty_master, &fds);
+        if (select(g_mhs_pty_master + 1, &fds, NULL, NULL, &tv) > 0 &&
+            mhs_pump_output()) {
+            return;
+        }
+    }
+    mhs_pump_output();
 }
 
 /**
@@ -586,6 +641,9 @@ static int run_mhs_interactive_repl(int mhs_argc, char **mhs_argv, MhsReplArgs *
         cfsetospeed(&slave_termios, B9600);
     }
 
+    /* psnd's editor has already drawn the line, so the driver must not echo it
+       back a second time. MicroHs's SimpleReadline echoes in software as well,
+       which mhs_pump_output() swallows. */
     /* Get window size */
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) != 0) {
         ws.ws_row = 24;
@@ -696,10 +754,10 @@ static int run_mhs_interactive_repl(int mhs_argc, char **mhs_argv, MhsReplArgs *
         if (input[0] == '\0') {
             /* Empty line - still send newline to MHS */
             if (g_mhs_pty_master >= 0) {
+                mhs_expect_echo("");
                 write(g_mhs_pty_master, "\n", 1);
             }
-            usleep(50000);
-            mhs_read_output();
+            mhs_drain_output(MHS_OUTPUT_TIMEOUT_MS);
             continue;
         }
 
@@ -723,13 +781,13 @@ static int run_mhs_interactive_repl(int mhs_argc, char **mhs_argv, MhsReplArgs *
 
         /* Pass input to MicroHs via PTY */
         if (g_mhs_pty_master >= 0) {
+            mhs_expect_echo(input);
             write(g_mhs_pty_master, input, strlen(input));
             write(g_mhs_pty_master, "\n", 1);
         }
 
-        /* Give MicroHs time to process and output */
-        usleep(100000); /* 100ms for output to appear */
-        mhs_read_output();
+        /* Wait for the result rather than for a fixed interval */
+        mhs_drain_output(MHS_OUTPUT_TIMEOUT_MS);
 
         /* Poll Link callbacks */
 #ifdef PSND_SHARED_CONTEXT
