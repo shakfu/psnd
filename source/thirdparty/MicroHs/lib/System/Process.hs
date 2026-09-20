@@ -1,5 +1,6 @@
 module System.Process(
   callCommand,
+  callProcess,
   system,
   readProcess,
   ) where
@@ -20,6 +21,9 @@ callCommand cmd = do
     ExitSuccess -> return ()
     ExitFailure r -> error $ "callCommand: failed " ++ show r ++ ", cmd=\n" ++ show cmd
 
+callProcess :: String -> [String] -> IO ()
+callProcess cmd = callCommand . unwords . (:) cmd
+
 system :: String -> IO ExitCode
 system cmd = do
   r <- withCAString cmd systemc
@@ -36,9 +40,10 @@ readProcess cmd args sin = do
   hPutStr hin sin
   hClose hin
   (fout, hout) <- openTempFile tmpDir "out.txt"
+  hClose hout
   bracket_ (return ())
            (removeFile fin >> removeFile fout)
            (do
                callCommand $ unwords $ cmd : ("<" ++ fin) : (">" ++ fout) : args
-               res <- hGetContents hout
-               length res `seq` return res)
+               res <- readFile fout
+               seq (length res) $ return res)

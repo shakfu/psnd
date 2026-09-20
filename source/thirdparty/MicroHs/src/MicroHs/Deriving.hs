@@ -1,5 +1,6 @@
 module MicroHs.Deriving(deriveStrat, expandField, mkGetName, etaReduce, mkTypeableInst) where
 import qualified Prelude(); import MHSPrelude
+import Control.Monad
 import Data.Char
 import Data.Function
 import Data.List
@@ -12,7 +13,7 @@ import qualified MicroHs.IdentMap as M
 import MicroHs.List
 import MicroHs.Names
 import MicroHs.TCMonad
-import Debug.Trace
+--import Debug.Trace
 
 -- Deriving runs when types level names are resolved, but not value level names.
 -- To get access to names that might not be in scope, the module Mhs.Builtin
@@ -24,22 +25,24 @@ import Debug.Trace
 --   all other names should be qualified with B@
 
 deriveStrat :: StandM -> Bool -> LHS -> [Constr] -> DerStrategy -> (Int, EConstraint) -> T [EDef]
-deriveStrat mctx newt lhs cs strat (narg, cls) =  -- narg is the number of arguments that need eta reducing
+deriveStrat mctx newt lhs cs strat (narg, acls) =  -- narg is the number of arguments that need eta reducing
 --  trace ("deriveStrat " ++ show (mctx, newt, lhs, cs, strat, narg, cls)) $
+  let c = cs!!0; cls = dropForallContext acls in
   case strat of
-    DerNone | newt && useNewt cls -> maybe (deriveNoHdr mctx narg lhs cs cls) return =<<
-                                     newtypeDerM mctx narg lhs (cs!!0) cls Nothing
-            | otherwise           -> deriveNoHdr mctx narg lhs cs cls
-    DerStock                      -> deriveNoHdr mctx narg lhs cs cls
-    DerNewtype | newt             -> newtypeDer  mctx narg lhs (cs!!0) cls Nothing
-    DerAnyClass                   -> anyclassDer mctx narg lhs cls
-    DerVia via | newt             -> newtypeDer  mctx narg lhs (cs!!0) cls (Just via)
+    DerNone | newt && useNewt cls -> maybe (deriveNoHdr mctx narg lhs cs  cls)
+                                           (newtypeDer  mctx narg lhs  c acls)
+                                           (getViaM narg lhs c)
+            | otherwise           -> deriveNoHdr mctx narg lhs cs  cls
+    DerStock                      -> deriveNoHdr mctx narg lhs cs  cls
+    DerNewtype | newt             -> newtypeDer  mctx narg lhs  c acls =<< getVia narg lhs c
+    DerAnyClass                   -> anyclassDer mctx narg lhs     cls
+    DerVia via | newt             -> newtypeDer  mctx narg lhs  c acls via
     _                             -> cannotDerive lhs cls
   where useNewt d = unIdent (getAppCon d) `notElem`
-          ["Data.Data_Class.Data", "Data.Typeable.Typeable", "GHC.Generics.Generic",
+          ["Data.Data_Class.Data", "Data.Typeable.Typeable", "GHC.Generics.Generic", "GHC.Generics.Generic1",
            "Language.Haskell.TH.Syntax.Lift", "Text.Read.Internal.Read", "Text.Show.Show"]
 
-type DeriverT = Int -> LHS -> [Constr] -> EConstraint -> T [EDef]   -- Bool indicates a newtype
+type DeriverT = Int -> LHS -> [Constr] -> EConstraint -> T [EDef]
 type Deriver = StandM -> DeriverT
 -- StandM is
 --   Nothing for regular deriving
@@ -58,7 +61,8 @@ derivers =
   ,("Data.Ord.Ord",                    derOrd)
   ,("Data.Traversable.Traversable",    derTraversable)
   ,("Data.Typeable.Typeable",          derTypeable)
-  ,("GHC.Generics.Generic",            derNotYet)
+  ,("GHC.Generics.Generic",            derGeneric)
+  ,("GHC.Generics.Generic1",           derGeneric1)
   ,("Language.Haskell.TH.Syntax.Lift", derLift)
   ,("Text.Read.Internal.Read",         derRead)
   ,("Text.Show.Show",                  derShow)
@@ -74,6 +78,7 @@ deriveNoHdr mctx narg lhs cs d = do
 getDeriver :: EConstraint -> Maybe Deriver
 getDeriver d = lookup (unIdent $ getAppCon d) derivers
 
+{-
 derNotYet :: Deriver
 derNotYet _ _ _ _ d = do
   notYet d
@@ -82,6 +87,7 @@ derNotYet _ _ _ _ d = do
 notYet :: EConstraint -> T ()
 notYet d =
   traceM ("Warning: cannot derive " ++ show d ++ " yet, " ++ showSLoc (getSLoc d))
+-}
 
 -- We will never have Template Haskell, but we pretend we can derive Lift for it.
 derLift :: Deriver
@@ -197,27 +203,41 @@ getFieldTys :: Either [SType] [ConstrField] -> [EType]
 getFieldTys (Left ts) = map snd ts
 getFieldTys (Right ts) = map (snd . snd) ts
 
+conFieldTys :: Constr -> [EType]
+conFieldTys (Constr _ _ _ _ as) = getFieldTys as
+
 -- If there is no mctx we use the default strategy to derive the instance context.
 -- The default strategy basically is to require the class constraint for every
 -- constructor argument (except direct recursion) with free type variables.
--- E.g.  data T = C a | D (a, Int) deriving Eq
+-- E.g.  data T a = C a | D (a, Int) deriving Eq
 -- will get context  (Eq a, Eq (a, Int))
 -- Used for regular deriving, not standalone.
 mkHdr :: StandM -> LHS -> [Constr] -> EConstraint -> T EConstraint
-mkHdr (Just (ctx, _)) _ _ _ = return ctx
-mkHdr _ lhs@(_, iks) cs cls = do
+mkHdr mctx lhs cs cls = mkHdrWithTyVarConstraint mctx lhs cs cls Nothing
+
+mkHdrWithTyVarConstraint :: StandM -> LHS -> [Constr] -> EConstraint -> Maybe EConstraint -> T EConstraint
+mkHdrWithTyVarConstraint (Just (ctx, _)) _ _ _ _ = return ctx
+mkHdrWithTyVarConstraint _ lhs@(_, iks) cs cls tyVarConstraint = do
   ty <- mkLhsTy 0 lhs
   let ctys :: [EType]  -- All top level types used by the constructors.
-      ctys = nubBy eqEType [ tt | Constr evs _ _ _ flds <- cs, tt <- getFieldTys flds,
-                            not $ null $ freeTyVars [tt] \\ map idKindIdent evs, not (eqEType ty tt) ]
-  pure $ eForall iks $ addConstraints (map (tApp cls) ctys) $ tApp cls ty
+      ctys = nubBy eqEType [ tt
+                           | Constr evs _ _ _ flds <- cs
+                           , tt <- getFieldTys flds
+                           , not (ty `eqEType` tt)
+                           , not $ null $ freeTyVars [tt] \\ map idKindIdent evs
+                           ]
+      tyVars = map (EVar . idKindIdent) iks  -- type variables in type definition
+      iks' = map (`IdKind` EVar dummyIdent) (freeTyVars [cls])  -- free type variables in the derived class
+      tyVarConstraints = maybe [] (\c -> map (tApp c) tyVars) tyVarConstraint
+--  traceM $ "mkHdrWithTyVarConstraints: " ++ show (cls, iks')
+  pure $ eForall (iks' ++ iks) $ addConstraints (map (tApp cls) ctys ++ tyVarConstraints) $ tApp cls ty
 
 -- instance header for Functor, Foldable, Traversable
 mkHdr1 :: StandM -> LHS -> [Constr] -> EConstraint -> T EConstraint
 mkHdr1 (Just (ctx, _)) _ _ _ = return ctx
 mkHdr1 _ lhs@(_, iks) cs cls = do
   ty' <- mkLhsTy 1 lhs
-  let tvar = idKindIdent $ last iks        -- safe, because iks is non-null when calling mkHdr1
+  let tvar = idKindIdent $ last iks               -- safe, because iks is non-null when calling mkHdr1
       ctys :: [EType]                             -- All top level types used by the constructors.
       ctys = nubBy eqEType [ tt
                            | Constr evs _ _ _ flds <- cs
@@ -315,12 +335,14 @@ derBounded mctx 0 lhs cs@(c0:_) ebnd = do
   let loc = getSLoc ebnd
       mkEqn bnd (Constr _ _ c _ flds) =
         let n = either length length flds
-        in  eEqn [] $ tApps c (replicate n (EVar bnd))
+        in  eEqn [] $ tApps c (replicate n bnd)
 
       iMinBound = mkIdentSLoc loc "minBound"
       iMaxBound = mkIdentSLoc loc "maxBound"
-      minEqn = mkEqn iMinBound c0
-      maxEqn = mkEqn iMaxBound (last cs)
+      eMinBound = EVar (mkBuiltin loc "minBound")
+      eMaxBound = EVar (mkBuiltin loc "maxBound")
+      minEqn = mkEqn eMinBound c0
+      maxEqn = mkEqn eMaxBound (last cs)
       inst = Instance hdr [Fcn iMinBound [minEqn], Fcn iMaxBound [maxEqn]] []
   -- traceM $ showEDefs [inst]
   return [inst]
@@ -337,21 +359,22 @@ derEnum mctx 0 lhs cs@(c0:_) enm | all isNullary cs = do
       eLastCon = case last cs of Constr _ _ c _ _ -> tCon c
 
       iFromEnum = mkIdentSLoc loc "fromEnum"
+      eFromEnum = eAppI (mkBuiltin loc "fromEnum")
       iToEnum = mkIdentSLoc loc "toEnum"
       iEnumFrom = mkIdentSLoc loc "enumFrom"
       iEnumFromThen = mkIdentSLoc loc "enumFromThen"
-      iEnumFromTo = mkBuiltin loc "enumFromTo"
-      iEnumFromThenTo = mkBuiltin loc "enumFromThenTo"
+      eEnumFromTo = eAppI2 (mkBuiltin loc "enumFromTo")
+      eEnumFromThenTo = eAppI3 (mkBuiltin loc "enumFromThenTo")
       enumFromEqn =
         -- enumFrom x = enumFromTo x (last cs)
         let x = EVar (mkIdentSLoc loc "x")
-        in eEqn [x] (eAppI2 iEnumFromTo x eLastCon)
+        in eEqn [x] (eEnumFromTo x eLastCon)
       enumFromThenEqn =
         -- enumFromThen x1 x2 = if fromEnum x2 >= fromEnum x1 then enumFromThenTo x1 x2 (last cs) else enumFromThenTo x1 x2 (head cs)
         let
           x1 = EVar (mkIdentSLoc loc "x1")
           x2 = EVar (mkIdentSLoc loc "x2")
-        in eEqn [x1, x2] (EIf (eAppI2 (mkBuiltin loc ">=") (EApp (EVar iFromEnum) x2) (EApp (EVar iFromEnum) x1)) (eAppI3 iEnumFromThenTo x1 x2 eLastCon) (eAppI3 iEnumFromThenTo x1 x2 eFirstCon))
+        in eEqn [x1, x2] (EIf (eAppI2 (mkBuiltin loc ">=") (eFromEnum x2) (eFromEnum x1)) (eEnumFromThenTo x1 x2 eLastCon) (eEnumFromThenTo x1 x2 eFirstCon))
       inst = Instance hdr [Fcn iFromEnum (fromEnumEqns loc cs), Fcn iToEnum (toEnumEqns loc cs), Fcn iEnumFrom [enumFromEqn], Fcn iEnumFromThen [enumFromThenEqn]] []
   return [inst]
 derEnum _ _ lhs _ e = cannotDerive lhs e
@@ -401,16 +424,19 @@ derIx mctx 0 lhs cs@(c0:cs') eix = do
         eAnd = eAppI2 (mkBuiltin loc "&&")
         eAdd = eAppI2 (mkBuiltin loc "+")
         eMul = eAppI2 (mkBuiltin loc "*")
-        iUnsafeRangeSize = mkIdentSLoc loc "unsafeRangeSize"
+        eRange           = eAppI  (mkBuiltin loc "range")
+        eUnsafeIndex     = eAppI2 (mkBuiltin loc "unsafeIndex")
+        eInRange         = eAppI2 (mkBuiltin loc "inRange")
+        eUnsafeRangeSize = eAppI  (mkBuiltin loc "unsafeRangeSize")
         (xp, xs) = mkPat c0 "x$"
         (yp, ys) = mkPat c0 "y$"
         (zp, zs) = mkPat c0 "z$"
-        rangeEqn = eEqn [ETuple [xp, yp]] $ EListish (LCompr (tApps iC0 zs) (zipWith3 (\x y z -> SBind z (eAppI iRange (ETuple [x, y]))) xs ys zs))
+        rangeEqn = eEqn [ETuple [xp, yp]] $ EListish (LCompr (tApps iC0 zs) (zipWith3 (\x y z -> SBind z (eRange (ETuple [x, y]))) xs ys zs))
         unsafeIndexEqn =
-          let mkUnsafeIndex x y z = eAppI2 iUnsafeIndex (ETuple [x, y]) z
-              mkUnsafeRangeSize x y = eAppI iUnsafeRangeSize (ETuple [x, y])
+          let mkUnsafeIndex x y z = eUnsafeIndex (ETuple [x, y]) z
+              mkUnsafeRangeSize x y = eUnsafeRangeSize (ETuple [x, y])
           in eEqn [ETuple [xp, yp], zp] $ foldl (\ acc (x, y, z) -> eAdd (mkUnsafeIndex x y z) (eMul (mkUnsafeRangeSize x y) acc)) (mkUnsafeIndex (head xs) (head ys) (head zs)) $ zip3 (tail xs) (tail ys) (tail zs)
-        inRangeEqn = eEqn [ETuple [xp, yp], zp] $ foldr1 eAnd $ zipWith3 (\x y z -> eAppI2 iInRange (ETuple [x, y]) z) xs ys zs
+        inRangeEqn = eEqn [ETuple [xp, yp], zp] $ foldr1 eAnd $ zipWith3 (\x y z -> eInRange (ETuple [x, y]) z) xs ys zs
         inst = Instance hdr [Fcn iRange [rangeEqn], Fcn iUnsafeIndex [unsafeIndexEqn], Fcn iInRange [inRangeEqn]] []
     return [inst]
   else
@@ -481,6 +507,7 @@ derRead mctx 0 lhs cs eread = do
   let
     loc = getSLoc eread
     iReadPrec = mkIdentSLoc loc "readPrec"
+    eReadPrec = EVar (mkBuiltin loc "readPrec")
     iReadList = mkIdentSLoc loc "readList"
     iReadListPrec = mkIdentSLoc loc "readListPrec"
     eReadListDefault = EVar (mkBuiltin loc "readListDefault")
@@ -492,8 +519,8 @@ derRead mctx 0 lhs cs eread = do
     eExpectIdent s = eAppI iExpectP (eAppI (mkBuiltin loc "Ident") (ELit loc (LStr s)))
     eExpectPunc s = eAppI iExpectP (eAppI (mkBuiltin loc "Punc") (ELit loc (LStr s)))
     eExpectSymbol s = eAppI iExpectP (eAppI (mkBuiltin loc "Symbol") (ELit loc (LStr s)))
-    eReadField = eAppI (mkBuiltin loc "step") (EVar iReadPrec)
-    eReadNamedField name = eAppI2 (mkBuiltin loc "readField") (ELit loc (LStr name)) (eAppI (mkBuiltin loc "reset") (EVar iReadPrec))
+    eReadField = eAppI (mkBuiltin loc "step") eReadPrec
+    eReadNamedField name = eAppI2 (mkBuiltin loc "readField") (ELit loc (LStr name)) (eAppI (mkBuiltin loc "reset") eReadPrec)
     eReturn = eAppI (mkBuiltin loc "return")
     ePfail = EVar (mkBuiltin loc "pfail")
     readConstr c@(Constr _ _ ident isInfix fields) =
@@ -521,16 +548,18 @@ derRead _ _ lhs _ e = cannotDerive lhs e
 --  data T a = A
 derData :: Deriver
 derData mctx _ lhs@(utyname, vks) cs edata = do
-  hdr <- mkHdr mctx lhs cs edata
-  mn <- getDefModuleName mctx
   let
-    tyname = qualIdent mn utyname
     loc = getSLoc edata
     mkB = mkBuiltin loc
     mkI = mkIdentSLoc loc
     lit = ELit loc
     str = lit . LStr . unIdentPar
     eList = EListish . LList
+    etyp = EVar (mkI nameDataTypeableTypeable)
+  hdr <- mkHdrWithTyVarConstraint mctx lhs cs edata (Just etyp)
+  mn <- getDefModuleName mctx
+  let
+    tyname = qualIdent mn utyname
     iMkDataType = mkB "mkDataType"
     iMkConstrTag = mkB "mkConstrTag"
     iConstrIndex = mkB "constrIndex"
@@ -618,9 +647,9 @@ derFoldable mctx 1 lhs@(_, tyvs@(_:_)) cs efoldable = do
   let loc = getSLoc efoldable
       var = idKindIdent (last tyvs)
       eqns = map mkEqn cs
-      mkEqn c@(Constr _ _ _ _ flds) =
+      mkEqn c =
         let (xp, xs) = mkPat c "x$"
-            ts = getFieldTys flds
+            ts = conFieldTys c
             rhs = foldr EApp eZ (zipWith EApp (map (mkFold eF) ts) xs)
         in  eEqn [EVar iF, EVar iZ, xp] rhs
 
@@ -636,7 +665,7 @@ derFoldable mctx 1 lhs@(_, tyvs@(_:_)) cs efoldable = do
               Just (con, []) | con == var -> f
               Just (_, ts@(_:_)) -> eFfoldr (mkFold f (last ts))
               _ -> eFlipConst
-        
+
       iF = mkIdentSLoc loc "f"
       eF = EVar iF
       iZ = mkIdentSLoc loc "z"
@@ -690,87 +719,103 @@ derTraversable _ _ lhs _ e = cannotDerive lhs e
 
 --------------------------------------------
 
-newtypeDer :: StandM -> Int -> LHS -> Constr -> EConstraint -> Maybe EConstraint -> T [EDef]
-newtypeDer mctx narg lhs c acls mvia =
-  maybe (tcError (getSLoc acls) "Bad newtype deriving") return =<<
-  newtypeDerM mctx narg lhs c acls mvia
+-- If we have C :: Type -> Constraint and
+--  newtype N = MkN T deriving C via V
+-- we will derive
+--  instance C N where
+--    ... coerce @N @V ...   -- covariant use of N, flip for contravariant
+-- assuming we already have
+--  instance C V
+-- this will be type correct.
+-- In case there is no 'via V' we use V=T.
+--
+-- For a constructor class, CC :: (Type->Type) -> Constraint
+--  newtype CN a - MkCN (CT a) deriving CC via CV
+-- we will derive
+--  instance CC CN where
+--    ... coerce @CN @CV ...   -- covariant use of CN, flip for contravariant
+-- assuming we already have
+--  instance CC CV
+-- this will be type correct.
+-- In case there is no 'via V' we use CV=CT.
+-- Note the use of CT, not (CT a).  So the type wrapped by MkCN needs to be eta reduced.
 
-newtypeDerM :: StandM -> Int -> LHS -> Constr -> EConstraint -> Maybe EConstraint -> T (Maybe [EDef])
-newtypeDerM mctx narg lhs@(_, iks) c acls mvia = do
+getViaM :: Int -> LHS -> Constr -> Maybe EType
+getViaM narg (_, iks) con =
+  let oldty = conFieldTys con !! 0                -- the underlying type, full
+  in  case etaReduce (takeEnd narg iks) oldty of  -- the underlying type, eta reduced
+        ([], rt) -> Just rt
+        _ -> Nothing
+
+getVia :: Int -> LHS -> Constr -> T EType
+getVia narg lhs con = maybe (tcError (getSLoc lhs) "Bad newtype deriving") return $ getViaM narg lhs con
+
+newtypeDer :: StandM -> Int -> LHS -> Constr -> EConstraint -> EType -> T [EDef]
+newtypeDer mctx narg lhs@(_tycon, iks) _con acls viaty = do
   let loc = getSLoc cls
       (clsIks, cls) = unForall acls
-      oldty' =                           -- the underlying type, full
-        case c of
-          Constr [] [] _ _ (Left [(False, t)]) -> t
-          Constr [] [] _ _ (Right [(_, (_, t))]) -> t
-          _ -> error "newtypeDer"
---  traceM ("newtypeDer " ++ show (mctx, narg, tycon, iks, c, acls, mvia, oldty'))
-  let mviaty =
-        case mvia of
-          Just via -> Just via
-          Nothing  ->
-            case etaReduce (takeEnd narg iks) oldty' of  -- the underlying type, eta reduced
-              ([], rt) -> Just rt
-              _ -> Nothing
-  case mviaty of
-    Nothing -> return Nothing
-    Just viaty -> do
-      mhdr <-
-        case mctx of
-          Just (hdr, _) -> pure $ Just hdr
-          Nothing -> do
-            newty <- mkLhsTy narg lhs                    -- the newtype, eta reduced
-            -- XXX repeats what we might have done above
-            let moldty = case etaReduce (takeEnd narg iks) oldty' of  -- the underlying type, eta reduced
-                           ([], rt) -> Just rt
-                           _ -> Nothing
-            case moldty of
-              Nothing -> return Nothing
-              Just oldty -> do
-                let ctxOld = tApp cls viaty
-                    coOldNew = mkCoercible loc oldty newty
-                    coOldVia =
-                      case mvia of  -- the via type is also eta reduced
-                        Just via -> [mkCoercible loc via newty]
-                        Nothing  -> []
-                    ctx = filter (not . null . freeTyVars . (:[])) (ctxOld : coOldNew : coOldVia)
-                    iks' = dropEnd narg iks
-                pure $ Just (eForall (clsIks ++ iks') $ addConstraints ctx $ tApp cls newty)
---  traceM ("newtypeDer: " ++ show (hdr, newty, viaty))
-      case mhdr of
-        Nothing -> return Nothing
-        Just hdr -> do
-          let qiCls = getAppCon cls
-              clsQual = qualOf qiCls
-          ct <- gets classTable
-          (ClassInfo _ _ _ mits _) <-
-            case M.lookup qiCls ct of
-              Nothing -> tcError loc $ "not a class " ++ showIdent qiCls
-              Just x -> return x
-
-          -- hdr looks like forall vs . ctx => C t1 ... tn
-          let (_, newtys) = getApp $ dropForallContext hdr
-              mkMethod (mi, amty) = do
-                let (tvs, mty) =
-                      case amty of
-                        EForall _ xs (EApp (EApp _implies _Ca) t) -> (map idKindIdent xs, t)
-                        _ -> impossibleShow amty
-                    qvar t = EQVar t kType
-                    nty =
-                      if length tvs /= length newtys then mhsError "mkMethod: arity" else
-                        case subst (zip tvs newtys) mty of
-                          EForall q vks t -> EForall q (map (\ (IdKind i _) -> IdKind i eDummy) vks) $ qvar t
-                          t -> qvar t
-
-                    vty = qvar $ dropForallContext $ subst (zip tvs (init newtys ++ [viaty])) mty
-                    msign = Sign [mi] nty
-                    qmi = EQVar (EVar $ qualIdent clsQual mi) amty   -- Use a qualified name for the method
-                    body = Fcn mi [eEqn [] $ eAppI2 (mkBuiltin loc "coerce") (ETypeArg vty) qmi]
-                return [msign, body]
-          body <- concat <$> mapM mkMethod mits
+--  traceM ("newtypeDer: " ++ show (hdr, viaty))
+  let qiCls = getAppCon cls
+      clsQual = qualOf qiCls
+  ct <- gets classTable
+  (ClassInfo _ supers clsCon mits _) <-
+    case M.lookup qiCls ct of
+      Nothing -> tcError loc $ "not a class " ++ showIdent qiCls
+      Just x -> return x
+  hdr <-
+    case mctx of
+      Just (h, _) -> pure h
+      Nothing -> do
+        newtyr <- mkLhsTy narg lhs                    -- the newtype, eta reduced
+        let
+          cdef = tApp cls newtyr       -- the instance we are trying to make
+          ctxOld = tApp cls viaty
+          ctx = filter (not . null . freeTyVars . (:[])) [ctxOld]
+          iks' = dropEnd narg iks
+          -- clsCon is the class constructor type
+          --   forall ... t1 -> t2 -> C v1 ... vn
+          -- extract v1...vn from this
+          supVs = map unEVar $ snd $ getApp $ snd $ getArrows $ dropForallContext clsCon
+            where unEVar (EVar i) = i; unEVar _ = impossible
+          curTs = snd $ getApp cdef   -- extract the actual types in the instance
+          xctx = filter hasTyVars $ map (subst s) supers     -- add the superclasses as extra context (if they have tyvars)
+            where s = zip supVs curTs                        -- substitution to get the supers to use the right types
+                  hasTyVars t = not $ null $ freeTyVars [t]
+--        traceM $ "newtypeDer newtyr=" ++ show newtyr ++ ", acls=" ++ show acls ++ ", clsIks=" ++ show clsIks ++
+--                 ", supers=" ++ show supers ++ ", xiks=" ++ show xiks ++ ", (iks, iks')=" ++ show (iks, iks') ++
+--                 ", clsCon=" ++ show clsCon ++ ", xctx=" ++ show xctx
+--        traceM $ "newtypeDer " ++ show (xctx, ctx)
+        pure $ eForall (clsIks ++ iks') $ addConstraints (xctx ++ ctx) cdef
+  -- hdr looks like forall vs . ctx => C t1 ... tn
+  let (_, newtys) = getApp $ dropForallContext hdr
+      mkMethod (mi, amty) = do
+        let (tvs, mty) =
+              case amty of
+                EForall _ xs (EApp (EApp _implies _Ca) t) -> (map idKindIdent xs, t)
+                _ -> impossiblePP amty
+            qvar t = EQVar t kType
+            nty = subst (zip tvs newtys) mty
+            -- Any leading quantifier in nty (used in the method signature)
+            -- also scopes over vty (used in the method body).
+            -- The substitution above might have changed the bound variables.
+            -- Redo the alpha conversion for vty before substituting in the viaty.
+            vty  = subst (zip tvs (init newtys ++ [viaty])) $ dropForallContext $
+                   case (mty, nty) of
+                     (EForall _ iks' t, EForall _ iks'' _) -> subst alpha t
+                       where alpha = zipWith (\ (IdKind i' _) (IdKind i'' _) -> (i', EVar i'')) iks' iks''
+                     _ -> mty
+            msign = Sign [mi] (qvar nty)
+            qmi = EQVar (EVar $ qualIdent clsQual mi) amty   -- Use a qualified name for the method
+            body = Fcn mi [eEqn [] $ eAppI2 (mkBuiltin loc "coerce") (ETypeArg $ qvar vty) qmi]
+--        traceM $ "mkMethod: mi=" ++ show mi ++ "\n  mty=" ++ show mty ++ "\n  tvs=" ++ show tvs ++ "\n  newtys=" ++ show newtys ++ "\n  viaty=" ++ show viaty ++ "\n  nty=" ++ show nty ++ "\n  vty=" ++ show vty
+        unless (length tvs == length newtys) $
+          mhsError "mkMethod: arity"
+        return [msign, body]
+--  traceM $ "newtypeDer " ++ show (hdr) -- , newtys, xiks, supers, hdr)
+  body <- concat <$> mapM mkMethod mits
 
 --  traceM $ "newtypeDer: " ++ show (Instance hdr body [])
-          return (Just [Instance hdr body []])
+  return [Instance hdr body []]
 
 -- Eta reduce as many of the variables as possible.
 -- E.g. etaReduce [a,b] (T a b) = ([], T)
@@ -784,3 +829,21 @@ anyclassDer :: StandM -> Int -> LHS -> EConstraint -> T [EDef]
 anyclassDer mctx _ lhs cls = do
   hdr <- mkHdr mctx lhs [] cls
   return [Instance hdr [] []]
+
+--------------------------------------------
+
+derGeneric :: Deriver
+derGeneric mctx 0 lhs cs egeneric = do
+  hdr <- mkHdr mctx lhs cs egeneric
+  let
+    inst = Instance hdr [] []
+  return [inst]
+derGeneric _ _ lhs _ e = cannotDerive lhs e
+
+derGeneric1 :: Deriver
+derGeneric1 mctx 1 lhs cs egeneric1 = do
+  hdr <- mkHdr1 mctx lhs cs egeneric1
+  let
+    inst = Instance hdr [] []
+  return [inst]
+derGeneric1 _ _ lhs _ e = cannotDerive lhs e

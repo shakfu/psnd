@@ -13,14 +13,15 @@ import Data.ByteString.Internal(ByteString)
 import Data.Maybe
 import Data.String
 import Unsafe.Coerce
-import PrimTable
 
+import PrimTable
 import MicroHs.Desugar(LDef, encodeInteger)
 import MicroHs.Expr
 import MicroHs.Exp
 import MicroHs.ExpPrint(encodeString)
 import MicroHs.Ident
 import qualified MicroHs.IdentMap as M
+import Text.PrettyPrint.HughesPJLiteClass(prettyShow)
 
 translateAndRun :: ([LDef], Exp) -> IO ()
 translateAndRun defs = do
@@ -58,11 +59,11 @@ trans r ae =
     Lit (LDouble i) -> unsafeCoerce i
     Lit (LFloat i) -> unsafeCoerce i
     Lit (LStr s) -> trans r (encodeString s)
-    Lit (LBStr s) -> unsafeCoerce (Data.String.fromString s :: ByteString)
+    Lit (LBStr s) -> unsafeCoerce s
     Lit (LPrim p) -> fromMaybe (error $ "trans: no primop " ++ show p) $ lookup p primTable
     Lit (LInteger i) -> trans r (encodeInteger i)
-    Lit (LForImp _ s _) -> trans r (App (Lit (LPrim "dynsym")) (Lit (LStr s)))
-    _ -> error $ "trans: impossible: " ++ show ae
+    Lit f@(LForImp _ _ _ _) -> trans r (App (Lit (LPrim "dynsym")) (Lit (LStr (drop 1 $ showLit f))))
+    _ -> error $ "trans: impossible: " ++ prettyShow ae
 
 -- Use linear search in this table.
 -- 99% of the hits are among the combinators.
@@ -82,20 +83,74 @@ primTable = [
   ("Y", _primitive "Y"),
   ("B'", _primitive "B'"),
   ("Z", _primitive "Z"),
---  ("J", _primitive "J"),
+  ("J", _primitive "J"),
   ("R", _primitive "R"),
   ("K2", _primitive "K2"),
   ("K3", _primitive "K3"),
   ("K4", _primitive "K4"),
   ("C'B", _primitive "C'B"),
+  ("L", _primitive "L"),
+  ("KK", _primitive "KK"),
+  ("KA", _primitive "KA"),
+  ("T3", _primitive "T3"),
+  ("T4", _primitive "T4"),
+  ("T5", _primitive "T5"),
+  ("T6", _primitive "T6"),
+  ("T7", _primitive "T7"),
+  ("T8", _primitive "T8"),
+  ("T9", _primitive "T9"),
+  ("T10", _primitive "T10"),
+  ("T11", _primitive "T11"),
+  ("T12", _primitive "T12"),
+  ("T13", _primitive "T13"),
+  ("T14", _primitive "T14"),
+  ("T15", _primitive "T15"),
+  ("T16", _primitive "T16"),
+  ("TAG0", _primitive "TAG0"),
+  ("TAG1", _primitive "TAG1"),
+  ("TAG2", _primitive "TAG2"),
+  ("TAG3", _primitive "TAG3"),
+  ("TAG4", _primitive "TAG4"),
+  ("TAG5", _primitive "TAG5"),
+  ("TAG6", _primitive "TAG6"),
+  ("TAG7", _primitive "TAG7"),
+  ("TAG8", _primitive "TAG8"),
+  ("TAG9", _primitive "TAG9"),
+  ("TAG10", _primitive "TAG10"),
+  ("TAG11", _primitive "TAG11"),
+  ("TAG12", _primitive "TAG12"),
+  ("TAG13", _primitive "TAG13"),
+  ("TAG14", _primitive "TAG14"),
+  ("TAG15", _primitive "TAG15"),
+  ("TAG16", _primitive "TAG16"),
+  ("TAG17", _primitive "TAG17"),
+  ("TAG18", _primitive "TAG18"),
+  ("TAG19", _primitive "TAG19"),
+  ("TAG20", _primitive "TAG20"),
+  ("TAG21", _primitive "TAG21"),
+  ("TAG22", _primitive "TAG22"),
+  ("TAG23", _primitive "TAG23"),
+  ("TAG24", _primitive "TAG24"),
+  ("TAG25", _primitive "TAG25"),
+  ("TAG26", _primitive "TAG26"),
+  ("TAG27", _primitive "TAG27"),
+  ("TAG28", _primitive "TAG28"),
+  ("TAG29", _primitive "TAG29"),
+  ("TAG30", _primitive "TAG30"),
+  ("TAG31", _primitive "TAG31"),
+  ("TAG32", _primitive "TAG32"),
   ("+", _primitive "+"),
   ("-", _primitive "-"),
   ("*", _primitive "*"),
   ("quot", _primitive "quot"),
   ("rem", _primitive "rem"),
+  ("neg", _primitive "neg"),
+  ("u+", _primitive "u+"),
+  ("u-", _primitive "u-"),
+  ("u*", _primitive "u*"),
   ("uquot", _primitive "uquot"),
   ("urem", _primitive "urem"),
-  ("neg", _primitive "neg"),
+  ("uneg", _primitive "uneg"),
   ("and", _primitive "and"),
   ("or", _primitive "or"),
   ("xor", _primitive "xor"),
@@ -104,6 +159,7 @@ primTable = [
   ("shr", _primitive "shr"),
   ("ashr", _primitive "ashr"),
   ("subtract", _primitive "subtract"),
+  ("usubtract", _primitive "usubtract"),
   ("popcount", _primitive "popcount"),
   ("clz", _primitive "clz"),
   ("ctz", _primitive "ctz"),
@@ -131,7 +187,11 @@ primTable = [
   ("f>=", _primitive "f>="),
   ("fneg", _primitive "fneg"),
   ("itof", _primitive "itof"),
+  ("utof", _primitive "utof"),
+  ("ftoi", _primitive "ftoi"),
   ("Itof", _primitive "Itof"),
+  ("ftod", _primitive "ftod"),
+  ("dtof", _primitive "dtof"),
   ("d+", _primitive "d+"),
   ("d-", _primitive "d-"),
   ("d*", _primitive "d*"),
@@ -144,7 +204,9 @@ primTable = [
   ("d>=", _primitive "d>="),
   ("dneg", _primitive "dneg"),
   ("itod", _primitive "itod"),
+  ("utod", _primitive "utod"),
   ("Itod", _primitive "Itod"),
+  ("dtoi", _primitive "dtoi"),
   ("seq", _primitive "seq"),
   ("icmp", _primitive "icmp"),
   ("ucmp", _primitive "ucmp"),
@@ -160,12 +222,16 @@ primTable = [
   ("IO.stderr", _primitive "IO.stderr"),
   ("IO.getArgRef", _primitive "IO.getArgRef"),
   ("IO.performIO", _primitive "IO.performIO"),
+  ("IO.atomic", _primitive "IO.atomic"),
   ("IO.gc", _primitive "IO.gc"),
   ("IO.stats", _primitive "IO.stats"),
   ("raise", _primitive "raise"),
   ("catch", _primitive "catch"),
   ("dynsym", _primitive "dynsym"),
-  ("newCAStringLen", _primitive "newCAStringLen"),
+  ("bsnew", _primitive "bsnew"),
+  ("bsappbyte", _primitive "bsappbyte"),
+  ("bsappchar", _primitive "bsappchar"),
+  ("bsfreeze", _primitive "bsfreeze"),
   ("packCString", _primitive "packCString"),
   ("packCStringLen", _primitive "packCStringLen"),
   ("toInt", _primitive "toInt"),
@@ -191,15 +257,14 @@ primTable = [
   ("bs>", _primitive "bs>"),
   ("bs>=", _primitive "bs>="),
   ("bscmp", _primitive "bscmp"),
-  ("bspack", _primitive "bspack"),
   ("bsunpack", _primitive "bsunpack"),
   ("bsreplicate", _primitive "bsreplicate"),
   ("bslength", _primitive "bslength"),
   ("bssubstr", _primitive "bssubstr"),
   ("bsindex", _primitive "bsindex"),
   ("bswrite", _primitive "bswrite"),
+  ("bsread", _primitive "bsread"),
   ("fromUTF8", _primitive "fromUTF8"),
-  ("toUTF8", _primitive "toUTF8"),
   ("headUTF8", _primitive "headUTF8"),
   ("tailUTF8", _primitive "tailUTF8"),
   ("fp+", _primitive "fp+"),
@@ -208,8 +273,12 @@ primTable = [
   ("fpfin", _primitive "fpfin"),
   ("fp2bs", _primitive "fp2bs"),
   ("bs2fp", _primitive "bs2fp"),
+  ("bsgrab", _primitive "bsgrab"),
+  ("bsgrablen", _primitive "bsgrablen"),
   ("IO.fork", _primitive "IO.fork"),
   ("IO.thid", _primitive "IO.thid"),
+  ("IO.waitrdfd", _primitive "IO.waitrdfd"),
+  ("IO.waitwrfd", _primitive "IO.waitwrfd"),
   ("thnum", _primitive "thnum"),
   ("IO.throwto", _primitive "IO.throwto"),
   ("IO.yield", _primitive "IO.yield"),
@@ -226,15 +295,18 @@ primTable = [
   ("SPnew", _primitive "SPnew"),
   ("SPderef", _primitive "SPderef"),
   ("SPfree", _primitive "SPfree"),
-
   ("I+", _primitive "I+"),
   ("I-", _primitive "I-"),
   ("I*", _primitive "I*"),
   ("Iquot", _primitive "Iquot"),
   ("Irem", _primitive "Irem"),
+  ("Ineg", _primitive "Ineg"),
+  ("Iu+", _primitive "Iu+"),
+  ("Iu-", _primitive "Iu-"),
+  ("Iu*", _primitive "Iu*"),
   ("Iuquot", _primitive "Iuquot"),
   ("Iurem", _primitive "Iurem"),
-  ("Ineg", _primitive "Ineg"),
+  ("Iuneg", _primitive "Iuneg"),
   ("Iand", _primitive "Iand"),
   ("Ior", _primitive "Ior"),
   ("Ixor", _primitive "Ixor"),
@@ -243,6 +315,7 @@ primTable = [
   ("Iashr", _primitive "Iashr"),
   ("Iinv", _primitive "Iinv"),
   ("Isubtract", _primitive "Isubtract"),
+  ("Iusubtract", _primitive "Iusubtract"),
   ("Ipopcount", _primitive "Ipopcount"),
   ("Iclz", _primitive "Iclz"),
   ("Ictz", _primitive "Ictz"),
@@ -267,5 +340,6 @@ primTable = [
   ("Wkderef", _primitive "Wkderef"),
   ("Wkfinal", _primitive "Wkfinal"),
   ("IO.getmaskingstate", _primitive "IO.getmaskingstate"),
-  ("IO.setmaskingstate", _primitive "IO.setmaskingstate")
+  ("IO.setmaskingstate", _primitive "IO.setmaskingstate"),
+  ("IO.pp", _primitive "IO.pp")
   ]

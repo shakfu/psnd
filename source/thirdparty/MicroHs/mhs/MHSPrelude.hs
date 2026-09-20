@@ -7,6 +7,7 @@ module MHSPrelude(
   module Data.Bool,
   module Data.Bounded,
   module Data.Char,
+  module Data.Coerce,
   module Data.Double,
   module Data.Either,
   module Data.Enum,
@@ -26,6 +27,7 @@ module MHSPrelude(
   module Data.Ratio,
   module Data.Real,
   module Data.Records,
+  module Data.Semigroup,
   module Data.String,
   module Data.Tuple,
   module Data.Typeable,
@@ -36,7 +38,7 @@ module MHSPrelude(
   _usingMhs, _wordSize,
   _isWindows,
   appendDot,
-  wantGMP,
+  wantGMP, wantImath,
   compiledWithMhs,
   Int64,
   HasCallStack,
@@ -51,6 +53,7 @@ import Control.Monad.Fail(MonadFail(..))
 import Data.Bool(Bool(..), (&&), (||), not, otherwise)
 import Data.Bounded(Bounded(..))
 import Data.Char(Char, String)
+import Data.Coerce(coerce)
 import Data.Double(Double)
 import Data.Either(Either(..), either)
 import Data.Enum(Enum(..))
@@ -77,6 +80,7 @@ import Data.Ord(Ord(..), Ordering(..))
 import Data.Ratio(Rational)
 import Data.Real(Real(..))
 import Data.Records  -- needed for data types with fields
+import Data.Semigroup
 import Data.String(IsString(..), lines, unlines, words, unwords)
 import Data.Tuple(fst, snd, curry, uncurry)
 import System.IO.Base(IO, putChar, putStr, putStrLn, print, getLine, getContents, interact,
@@ -103,9 +107,13 @@ appendDot x y =
 
 -- Exported by the runtime system to indicate if GMP is desired.
 foreign import capi "want_gmp" want_gmp :: Int
+foreign import capi "want_imath" want_imath :: Int
 
 wantGMP :: Bool
 wantGMP = want_gmp /= 0
+
+wantImath :: Bool
+wantImath = want_imath /= 0
 
 compiledWithMhs :: Bool
 compiledWithMhs = True

@@ -48,3 +48,15 @@ add_test(
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 set_tests_properties(mhs_smoke_tests PROPERTIES LABELS "integration" TIMEOUT 180)
+
+# Regression test: a module that changed on disk must run its new code. The
+# smoke test reruns one fixed file, so it cannot see a stale cache entry.
+add_test(
+    NAME mhs_reload_tests
+    COMMAND ${CMAKE_COMMAND}
+        -DPSND=$<TARGET_FILE:psnd_bin>
+        -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/reload
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/reload_test.cmake
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+set_tests_properties(mhs_reload_tests PROPERTIES LABELS "integration" TIMEOUT 180)

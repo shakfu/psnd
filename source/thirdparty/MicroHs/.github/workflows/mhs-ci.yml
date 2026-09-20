@@ -1,0 +1,151 @@
+name: MicroHs CI
+# Run on common architectures on push
+
+on:
+  push:
+#    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+# Only one job per branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-linux-x86_64:
+    runs-on: ubuntu-latest
+    steps:
+    - name: checkout repo
+      uses: actions/checkout@v4
+    - name: make
+      run: make
+    - name: make everytestmhs
+      run: make everytestmhs
+
+  build-linux-gmp-x86_64:
+    runs-on: ubuntu-latest
+    steps:
+    - name: checkout repo
+      uses: actions/checkout@v4
+    - name: install GMP (headers + libs)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgmp-dev
+    - name: make
+      run: make MHSGMPCCFLAGS=-DWANT_GMP=1 MCABALGMP=-fgmp MHSGMP=-ilib/gmp MHSGMPCCLIBS=-lgmp
+    - name: make everytestmhs
+      run: make MHSGMPCCFLAGS=-DWANT_GMP=1 MCABALGMP=-fgmp MHSGMP=-ilib/gmp MHSGMPCCLIBS=-lgmp everytestmhs
+    - name: make install
+      run: make MHSGMPCCFLAGS=-DWANT_GMP=1 MCABALGMP=-fgmp MHSGMP=-ilib/gmp MHSGMPCCLIBS=-lgmp minstall
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+    - name: checkout repo
+      uses: actions/checkout@v4
+    - name: make
+      run: make
+    - name: make everytestmhs
+      run: make everytestmhs
+
+  build-linux-x86_64-cabal:
+    runs-on: ubuntu-latest
+    steps:
+    - name: checkout repo
+      uses: actions/checkout@v4
+    - name: Cabal cache
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-cabal
+      with:
+        path: ~/.cabal
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('**/*.cabal') }}-${{ hashFiles('**/cabal.project') }}
+        restore-keys: |
+          ${{ runner.os }}-build-${{ env.cache-name }}-
+          ${{ runner.os }}-build-
+          ${{ runner.os }}-
+    - name: Install dependencies
+      run: |
+        cabal update
+        cabal build --only-dependencies
+    - name: Build
+      run: cabal build
+
+  build-linux-micro-x86_64:
+    runs-on: ubuntu-latest
+    steps:
+    - name: checkout repo
+      uses: actions/checkout@v4
+    - name: make
+      run: make CONF=micro
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+    - name: checkout repo
+      uses: actions/checkout@v4
+    - name: set up MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+    - name: nmake
+      run: nmake -f Makefile.windows
+    - name: nmake exampletest
+      run: nmake -f Makefile.windows exampletest
+
+  build-linux-x86:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: jirutka/setup-alpine@v1
+      with:
+        arch: x86
+        branch: v3.15
+        packages: >
+          build-base
+          gcc
+          make
+    - name: checkout repo
+      uses: actions/checkout@v4
+    - name: make
+      run: make
+      shell: alpine.sh {0}
+    - name: make everytestmhs
+      run: make everytestmhs
+      shell: alpine.sh {0}
+
+  build-linux-gmp-x86:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: jirutka/setup-alpine@v1
+      with:
+        arch: x86
+        branch: v3.15
+        packages: >
+          build-base
+          gcc
+          make
+          gmp-dev
+    - name: checkout repo
+      uses: actions/checkout@v4
+    - name: make
+      run: make MHSGMPCCFLAGS=-DWANT_GMP=1 MCABALGMP=-fgmp MHSGMP=-ilib/gmp MHSGMPCCLIBS=-lgmp
+      shell: alpine.sh {0}
+    - name: make everytestmhs
+      run: make MHSGMPCCFLAGS=-DWANT_GMP=1 MCABALGMP=-fgmp MHSGMP=-ilib/gmp MHSGMPCCLIBS=-lgmp everytestmhs
+      shell: alpine.sh {0}
+    - name: make install
+      run: make MHSGMPCCFLAGS=-DWANT_GMP=1 MCABALGMP=-fgmp MHSGMP=-ilib/gmp MHSGMPCCLIBS=-lgmp minstall
+      shell: alpine.sh {0}
+
+  build-emscripten:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: mymindstorm/setup-emsdk@v13
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
+    - uses: haskell-actions/setup@v2
+    - name: make newmhs
+      run: make newmhs
+    - name: run emscripten tests
+      run: make runtestemscripten

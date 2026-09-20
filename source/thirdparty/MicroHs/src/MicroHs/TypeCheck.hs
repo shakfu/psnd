@@ -19,6 +19,7 @@ module MicroHs.TypeCheck(
 import qualified Prelude(); import MHSPrelude
 import Control.Applicative
 import Control.Monad
+import qualified Data.ByteString.Char8 as BS
 import Data.Char
 import Data.Function
 import Data.List
@@ -37,6 +38,7 @@ import MicroHs.Names
 import MicroHs.Parse(dotDotIdent)
 import MicroHs.SymTab
 import MicroHs.TCMonad
+import Text.PrettyPrint.HughesPJLiteClass
 import Debug.Trace
 
 --primitiveKinds :: [String]
@@ -108,7 +110,7 @@ typeCheck flags globs impt aimps (EModule mn exps defs) =
     imps = map filterImports aimps
     tc =
       case defs of
-        SetTCState tcs : _ -> tcs  -- hack to set the saved TCState
+        SetTCState tcs : _ -> xTCStateToTCState tcs  -- hack to set the saved TCState
         _ -> mkTCState mn globs imps
   in case tcRun (tcDefs flags impt defs) tc of
        (tds, tcs) ->
@@ -335,9 +337,10 @@ mkTCState mdlName globs mdls =
 mergeDefaults :: Defaults -> Defaults -> Defaults
 mergeDefaults ds = foldr (uncurry $ M.insertWith mrg) ds . M.toList
   where mrg :: [EType] -> [EType] -> [EType]
-        mrg ts ts' | not (any (\ t -> not (elemBy eqEType t ts)) ts') = ts
-                   | not (any (\ t -> not (elemBy eqEType t ts')) ts) = ts'
-                   | otherwise = []
+        mrg ts ts' | all (\ t -> elemBy eqEType t ts) ts' = ts
+                   | any (\ t -> elemBy eqEType t ts') ts = ts'
+                   | otherwise = []  -- If neither module's default subsumes the other
+                                     -- then use empty defaults, as per spec.
 
 mergeInstInfo :: InstInfo -> InstInfo -> InstInfo
 mergeInstInfo (InstInfo m1 l1 fds) (InstInfo m2 l2 _) =
@@ -353,7 +356,7 @@ mergeInstInfo (InstInfo m1 l1 fds) (InstInfo m2 l2 _) =
 -- Approximate equality for dictionaries.
 -- The important thing is to avoid exact duplicates in the instance table.
 eqInstDict :: InstDict -> InstDict -> Bool
-eqInstDict (e, _) (e', _) = eqExpr e e'
+eqInstDict (InstDict e _) (InstDict e' _) = eqExpr e e'
 
 -- Identifier should only be seen with it's qualified name.
 isInstId :: Ident -> Bool
@@ -395,16 +398,18 @@ addInstTable ics = do
 --  tcTrace $ "addInstTable: " ++ show ics
   let
     -- Change type variable to unique unification variables.
-    -- These unification variables will never leak, but as an extra caution
-    -- we use negative numbers..
     freshSubst u iks =
-      zipWith (\ ik j -> (idKindIdent ik, EUVar j)) iks [u ..]
+      -- XXX
+      -- [u ..] is not portable between 64 and 32 bit since it uses
+      -- maxBound::Int which will differ between them.
+      -- XXX Using a function in InstInfo is not ideal.
+      zipWith (\ ik j -> (idKindIdent ik, EUVar j)) iks [u .. 100000000::Int]
 
     mkInstInfo :: InstDictC -> T (Ident, InstInfo)
     mkInstInfo (e, iks, ctx, ct, fds) = do
       case (iks, ctx, getApp ct) of
         ([], [], (c, [EVar i])) -> return (c, InstInfo (M.singleton i e) [] fds)
-        (_,  _,  (c, ts      )) -> return (c, InstInfo M.empty [(e, ii)] fds)
+        (_,  _,  (c, ts      )) -> return (c, InstInfo M.empty [InstDict e ii] fds)
           where ii u =
                   let ctx' = map (subst s) ctx
                       ts'  = map (subst s) ts
@@ -568,7 +573,7 @@ primTypes =
   in
       [
        -- The function arrow et al are bothersome to define in Primitives, so keep them here.
-       -- But the fixity is defined in Primitives.
+       -- The fixity is set by addPrimFixs
        (mkIdentB "->",           [entry identArrow    kTypeTypeTypeS]),
        (mkIdentB "=>",           [entry identImplies  kImplies]),
        (mkIdentB "~",            [entry identTypeEq   kTypeEqual]),
@@ -624,6 +629,10 @@ munify :: HasCallStack =>
 munify loc (Infer r) b = tSetRefType loc r b
 munify loc (Check a) b = unify loc a b
 
+-- Expand type synonyms, but keep location info
+expandSynLoc :: EType -> T EType
+expandSynLoc at = setSLocExpr (getSLoc at) <$> expandSyn at
+
 -- Synonyms are expanded after kind checking.
 -- There should be no synonyms in any of the symbol tables (except synTable).
 expandSyn :: HasCallStack =>
@@ -638,7 +647,7 @@ expandSyn at = do
     chk (EVar i) =
       case M.lookup i syns of
         Nothing -> return ()
-        _ -> tcError (getSLoc i) $ "bad synonym use: " ++ show i ++ " in " ++ show at
+        _ -> tcError (getSLoc i) $ "bad synonym use: " ++ showIdent i ++ " in " ++ showEType at
     chk (EUVar _) = return ()
     chk (EForall _ _ t) = chk t
     chk (ELit _ _) = return ()
@@ -681,7 +690,7 @@ expandSyn' syns = esyn
         EForall b iks tt | null ts -> EForall b iks (esyn tt)
         ELit _ (LStr _) -> t
         ELit _ (LInteger _) -> t
-        _ -> impossibleShow t
+        _ -> impossiblePP t
 
 
 mapEType :: (EType -> EType) -> EType -> EType
@@ -959,9 +968,7 @@ tcDefs flags impt ds = do
   dst <- tcDefsType ds                                -- kind check type definitions
 --  tcTrace ("tcDefs 2:\n" ++ showEDefs dst)
   mapM_ addTypeAndData dst                            -- add typedefinitions to the symbol table
-  dste <- tcExpandClassInst impt dst                  -- expand class&instance, do deriving
-  dumpIf flags Dderive $
-    tcTrace' $ "expanded:\n" ++ showEDefs dste
+  dste <- tcExpandClassInst flags impt dst            -- expand class&instance, do deriving
 --  tcTrace ("tcDefs 3:\n" ++ showEDefs dste)
   setDefault dste                                     -- set current defaults
   dste' <- tcDefsValue dste                           -- type check all value definitions
@@ -1030,8 +1037,8 @@ getKindSigns ds = do
   return $ M.fromList iks'
 
 -- Expand class and instance definitions (must be done after type synonym processing).
-tcExpandClassInst :: ImpType -> [EDef] -> T [EDef]
-tcExpandClassInst impt dst = do
+tcExpandClassInst :: Flags -> ImpType -> [EDef] -> T [EDef]
+tcExpandClassInst flags impt dst = do
   dsf <- withTypeTable $ do
     dsc <- concat <$> mapM expandClass dst              -- Expand all class definitions
     concat <$> mapM expandField dsc                     -- Add HasField instances
@@ -1040,7 +1047,12 @@ tcExpandClassInst impt dst = do
     case impt of
       ImpBoot -> return dsf
       ImpNormal -> concat <$> mapM doDeriving dsf       -- Add derived instances
-  concat <$> mapM expandInst dsd                        -- Expand all instance definitions
+  dumpIf flags Dderive $
+    tcTrace' $ "derived:\n" ++ showEDefs dsd
+  res <- concat <$> mapM expandInst dsd                        -- Expand all instance definitions
+  dumpIf flags DexpandInst $
+    tcTrace' $ "expanded:\n" ++ showEDefs res
+  return res
 
 -- Check&rename the given kinds, also insert the type variables in the symbol table.
 withVks :: forall a . HasCallStack => [IdKind] -> ([IdKind] -> T a) -> T a
@@ -1177,33 +1189,45 @@ tcStand st ct = do
      pure $ StandDeriving st' narg ct'
 
 -- The type variables vks are already in scope when we get here.
+-- With
+--  tyId :: k1 -> ... -> kn -> Type
+-- and
+--  cls = C t1 ... tj
+--  C :: (kk1 -> ... -> kkj -> kk -> Type) -> Constraint
+--        ...............................  this is k below
+-- then we need to find a k such that
+--  cls (tyId v1 ... vk) is well kinded.
 tcDeriving :: LHS -> Deriving -> T Deriving
 tcDeriving (tyId, vks) (Deriving strat cs) = do
-  let tcDerive (_, c) = do
-        let loc = getSLoc c
-        -- The kind of c has to be of the form (k1 -> ... kn -> Type) -> Constraint
+  let tcDerive (_, cls) = do
+        let loc = getSLoc cls
+        -- The kind of cls has to be of the form (k1 -> ... kn -> Type) -> Constraint
         -- Check that it is.
-        k <- newUVar
-        --traceM $ "tcDerive 1: " ++ show c
-        c' <- tCheckTypeTImpl QExpl (k `kArrow` kConstraint) c
-        --traceM $ "tcDerive 2: " ++ show c
-        (ks, _) <- getArrows <$> derefUVar k  -- get [k1,...,kn] and final kind
-        -- Checking that the final kind is Type happens with the tc call below.
-        let r = length ks                      -- number of args consumed by c
-            m = length vks                     -- number of args given to the data type
-            i = m - r                          -- keep this many
-            ty = tApps tyId (map (EVar . idKindIdent) (take i vks))
-        when (i < 0) $
+        vkk <- newUVar
+        --traceM $ "tcDerive 1: " ++ show cls
+        cls' <- tCheckTypeTImpl QExpl (vkk `kArrow` kConstraint) cls
+        --traceM $ "tcDerive 2: " ++ show cls'
+--        do { vkk' <- derefUVar vkk; traceM $ "vkk=" ++ show vkk' }
+        (kks, _) <- getArrows <$> derefUVar vkk      -- arrows in kk
+        -- The checking that the final kind is Type happens with the tc call below.
+        let kkn = length kks                        -- number of arrows in kk
+            n = length vks                          -- number of args given to the data type
+            k = n - kkn
+            ty = tApps tyId (map (EVar . idKindIdent) (take k vks))
+--        traceM $ "tcDeriving tyId=" ++ show tyId ++ " vks=" ++ show (map idKindIdent vks) ++ " cls=" ++ show cls ++ " kkn,n,k=" ++ show (kkn,n,k) ++ " ty=" ++ show ty
+        when (k < 0) $
           tcError loc "Bad deriving"
-        -- The generated instance has the form 'instance ... => c ty'.
+        -- The generated instance has the form 'instance ... => cls ty'.
         -- Check that this has kind Constraint.
         -- Also check that any via type also fulfills this.
-        let tc t = do _ <- tCheckTypeTImpl QExpl kConstraint (tApp c t); return ()
+        let tc t = do _ <- tCheckTypeTImpl QExpl kConstraint (tApp cls t); return ()
         tc ty
         case strat of
-          DerVia v -> tc v  -- XXX should this allow implicit quantification?
+          DerVia via -> tc via  -- XXX should this allow implicit quantification?
           _        -> return ()
-        return (r, c')
+--        traceM ("tcDerive: return " ++ show (kkn, cls'))
+        return (kkn, cls')
+
 
   cs' <- mapM tcDerive cs
   -- Ignore the kind here, it's checked for each derived type
@@ -1538,7 +1562,7 @@ addValueType adef = do
                 (fe, fty) <- tLookup "addValueType?" $ mkGetName tycon fld
                 extValETop fld fty fe
               addField _ = return ()
-      
+
   case adef of
     Sign is@(i:_) t | isConIdent i -> do
       -- pattern signature
@@ -1639,16 +1663,16 @@ tcDefValue adef =
       return $ Fcn (qualIdent' mn i) teqns
     ForImp cc ie i t -> do
       mn <- gets moduleName
-      t' <- withNewtypeAsSyns (expandSyn t)
+      t' <- withNewtypeAsSyns (expandSynLoc t)
       pure $ ForImp cc ie (qualIdent' mn i) t'
     -- Check that a foreign export match the declaration type.
     -- In most cases the types will be the same, but the declaration can be overloaded
     -- so we need to ensure that it is compatible with the export definition.
     ForExp cc ms e t -> do
       ((e', t'), ds) <- solveAndDefault True $ tInferExpr (ESign e t)
-      t'' <- withNewtypeAsSyns (expandSyn t')
+      t'' <- withNewtypeAsSyns (expandSynLoc t')
       let e'' = eLetB (eBinds ds) e'
-      pure $ ForExp cc (Just $ fromMaybe (show e) ms) e'' t''
+      pure $ ForExp cc (Just $ fromMaybe (showExpr e) ms) e'' t''
     Pattern{} -> impossible
     _ -> return adef
 
@@ -1692,7 +1716,7 @@ tcPatSyn _ = impossible
 addForall :: QForm -> EType -> T EType
 addForall _ t@EForall{} = return t
 addForall expl t = do
-  bvs <- stKeysLcl <$> gets valueTable         -- bound outside
+  bvs <- stKeysU <$> gets valueTable           -- bound outside
   let fvs = freeTyVars [t]                     -- free variables in t
       -- these are free, and need quantification.  eDummy indicates missing kind
       iks = map (\ i -> IdKind i eDummy) (fvs \\ bvs)
@@ -1740,9 +1764,15 @@ tcKind mk = assertTCMode (==TCType) . withTypeTable . tcKindT mk
 data Expected = Infer TRef | Check EType
 --  deriving(Show)
 
+{-
 instance Show Expected where
   show (Infer r) = "(Infer " ++ show r ++ ")"
-  show (Check t) = "(Check " ++ show t ++ ")"
+  show (Check t) = "(Check " ++ showExpr t ++ ")"
+-}
+instance Pretty Expected where
+  pPrintPrec l _ (Infer r) = parens $ text "Infer" <+> pPrint0 l r
+  pPrintPrec l _ (Check t) = parens $ text "Check" <+> pPrint0 l t
+
 
 tInfer :: forall a b . HasCallStack =>
           (Expected -> a -> T b) -> a -> T (Typed b)
@@ -1847,6 +1877,11 @@ tcExprR mt ae =
 
     EOper e ies -> tcOper e ies >>= tcExpr mt
     ELam _ qs -> tcExprLam mt loc qs
+    EQLit lloc mq lit@(LStr _) ->
+      -- Turn M."foo" into M.fromString ("foo" :: [Char])
+      tcExpr mt $ EApp (EVar $ qualIdent mq $ mkIdentSLoc lloc "fromString") (ESign (ELit lloc lit) eStr)
+        where eStr = EListish $ LList [EVar $ mkBuiltin loc "Char"]
+    EQLit _ _ _ -> impossible
     ELit _ lit -> do
       tcm <- gets tcMode
       case tcm of
@@ -1893,7 +1928,7 @@ tcExprR mt ae =
                 Just (EApp (EVar lst) (EVar c))
                  | lst == identList && c == identChar -> tcLit mt loc lit
                 Just (EVar bs)
-                 | bs == identByteString -> tcLit mt loc (LBStr s)
+                 | bs == identByteString -> tcLit mt loc (LBStr (BS.pack s))
                 _ -> do
                   (f, ft) <- tInferExpr (EVar (mkBuiltin loc "fromString"))
                   (_at, rt) <- unArrow loc ft
@@ -2064,13 +2099,13 @@ tcExprR mt ae =
            else
             tcExpr mt $ foldr eSetFields e ises
         Just c  -> tcExpr mt =<< dsRecCon unsetField c e ises
-          
+
     ESelect is -> do
         let x = eVarI loc "$x"
         tcExpr mt $ eLam [x] $ foldl (\ e i -> EApp (eGetField i) e) x is
     ETypeArg _ ->
         tcError loc "Bad type application"
-    _ -> error $ "tcExpr: cannot handle: " ++ show (getSLoc ae) ++ " " ++ show ae
+    _ -> error $ "tcExpr: cannot handle: " ++ prettyShow (getSLoc ae) ++ " " ++ showExpr ae
       -- impossible
 
 -- We need to use a case expression to do record updated if
@@ -2132,8 +2167,13 @@ dsUpdateCase cs e ies = chkUsed $ ECase e $ map mkArm cs
 
 dsSRec :: Maybe Ident -> Ident -> Ident -> [EStmt] -> EStmt
 dsSRec mmn imfix iret ss =
-  let vs = ETuple $ map EVar $ concatMap getStmtBound ss
+  let vs = eTuple $ map EVar $ concatMap getStmtBound ss
   in  SBind vs $ eAppI imfix $ eLam [ELazy True vs] $ EDo mmn (ss ++ [SThen $ eAppI iret vs])
+
+-- XXX Maybe allow singleton tuples
+eTuple :: [Expr] -> Expr
+eTuple [e] = e
+eTuple es = ETuple es
 
 -- A heuristic to decide if an identifier is a record label.
 -- If the name is in the symbol table and has function type, we say no.
@@ -2154,8 +2194,8 @@ tcExprAp mt ae args = do
     EApp f a -> tcExprAp mt f (a : args)
     EParen f -> tcExprAp mt f args
     EOper e ies -> tcOper e ies >>= \ eop -> tcExprAp mt eop args
-    EVar i | isIdent dictPrefixDollar i -> impossibleShow ae
-           | isDummyIdent i -> impossibleShow ae
+    EVar i | isIdent dictPrefixDollar i -> impossiblePP ae
+           | isDummyIdent i -> impossiblePP ae
            | otherwise -> do
              -- Type checking an expression (or type)
              (fn, t) <- tLookupV i
@@ -2178,7 +2218,7 @@ tcExprAp mt ae args = do
       tcExprApFn mt f t args
 
 data AnArg = ArgExpr Expr EType | ArgCtx EConstraint
-  deriving Show
+--  deriving Show
 
 -- Instantiate a function, but delay generating the dictionaries.
 -- When generating the dictionaries here (like tInst) there
@@ -2189,9 +2229,9 @@ data AnArg = ArgExpr Expr EType | ArgCtx EConstraint
 --  * solving the constraint early
 tcExprApFn :: HasCallStack =>
               Expected -> Expr -> EType -> [Expr] -> T Expr
---tcExprApFn mt fn fnt args | trace ("tcExprApFn: " ++ show (fn, fnt, args, mt)) False = undefined
+--tcExprApFn mt fn fnt args | trace ("tcExprApFn: fn=" ++ show fn ++ ", fnt=" ++ show fnt ++ ", args=" ++ show args ++ ", mt=" ++ show mt) False = undefined
 tcExprApFn mt fn atfn aargs = do
-  -- traceM $ "tcExprApFn: " ++ show (getSLoc aargs, mt, fn, atfn, aargs)
+--  traceM $ "tcExprApFn: " ++ show (getSLoc aargs, mt, fn, atfn, aargs)
 --  xx <- gets ctxTables
 --  traceM $ "tcExprApFn: ctxTables=" ++ show xx
   let loc = getSLoc fn
@@ -2210,8 +2250,8 @@ tcExprApFn mt fn atfn aargs = do
             loop ats aas ft'
           AConstaint ctx ft ->
             loop (ArgCtx ctx : ats) aas ft
-          ARet -> do
-            (at, rt) <- unArrow loc aft
+          ARet aft' -> do
+            (at, rt) <- unArrow loc aft'
             --traceM ("ARet " ++ show (at, rt))
             loop (ArgExpr a at : ats) as rt
         where useType i k t ft = do
@@ -2237,8 +2277,8 @@ tcExprApFn mt fn atfn aargs = do
         etmp' <- instSigma loc etmp rt mt
 
         let arg (ArgExpr e t) = do
-              --t' <- derefUVar t
-              --traceM ("final: checkSigma: " ++ show (e, t'))
+--              t' <- derefUVar t
+--              traceM ("final: checkSigma: " ++ show (e, t'))
               checkSigma e t
             arg (ArgCtx ctx) = newDict loc ctx
         args <- mapM arg aats
@@ -2340,10 +2380,8 @@ dsPatBind b = return [b]
 patBindPrefix :: String
 patBindPrefix = "pb"
 
-{-
 isPatBindVar :: Ident -> Bool
 isPatBindVar = isPrefixOf (patBindPrefix ++ uniqIdentSep) . unIdent
--}
 
 getAts :: EPat -> ([Ident], EPat)
 getAts (EAt x p) = (x:xs, p') where (xs, p') = getAts p
@@ -2386,7 +2424,7 @@ dsEFields apat =
     EParen p -> dsEFields p
     ENegApp _ -> return apat
     EOr ps -> EOr <$> mapM dsEFields ps
-    _ -> error $ "dsEFields " ++ show apat
+    _ -> error $ "dsEFields " ++ showExpr apat
 
 unsetField :: Ident -> Expr
 unsetField i = mkExn (getSLoc i) (unIdent i) "recConError"
@@ -2448,6 +2486,8 @@ tcOper ae aies = do
   fixs <- gets fixTable
   let
     opfix :: (Ident, Expr) -> T ((Expr, Fixity), Expr)
+    opfix (i, e) | Just 2 <- getTupleConstr i =  -- tcLSect/tcRSect can introduce ',' as an operator
+      return ((EVar i, (AssocNone, -1)), e)
     opfix (i, e) = do
       (ei, _) <- tLookupV i
       let fx = getFixity fixs (getAppCon ei)
@@ -2465,7 +2505,7 @@ tcLSect (EOper e ies) op = do
   e' <- tcOper e (ies ++ [(op, x)])
   case e' of
     EApp f x' | x' `eqExpr` x -> return f
-    _                   -> tcError loc "Bad section fixity"
+    _                         -> tcError loc "Bad section fixity"
 tcLSect e op =
   return (EApp (EVar op) e)
 
@@ -2476,7 +2516,7 @@ tcRSect op (EOper e ies) = do
   e' <- tcOper x ((op, e):ies)
   case e' of
     EApp (EApp _ x') _ | x `eqExpr` x' -> return (eLam [x] e')
-    _                            -> tcError loc "Bad section fixity"
+    _                                  -> tcError loc "Bad section fixity"
 tcRSect op e = do
   let x = eVarI (getSLoc op) "$x"
   return (eLam [x] (EApp (EApp (EVar op) x) e))
@@ -2520,7 +2560,7 @@ data Arg
   = AReqd         IdKind      EType       -- forall ->
   | AForall QForm [IdKind]    EType       -- forall .
   | AConstaint    EConstraint EType       -- =>
-  | ARet                                  -- none of the above
+  | ARet                      EType       -- none of the above
 --  deriving Show
 
 nextArg :: EType -> Arg
@@ -2528,7 +2568,7 @@ nextArg (EForall _ []  t)                  = nextArg t
 nextArg (EForall QReqd (ik:iks) t)         = AReqd ik (EForall QReqd iks t)
 nextArg (EForall q     iks      t)         = AForall q iks t
 nextArg t | Just (ctx, t') <- getImplies t = AConstaint ctx t'
-          | otherwise                      = ARet
+          | otherwise                      = ARet t
 
 tcExprLam :: HasCallStack => Expected -> SLoc -> [Eqn] -> T Expr
 tcExprLam mt loc qs = do
@@ -2598,11 +2638,13 @@ tcPats at pps ta =
         case ds of
           [] -> return eqn
           _  -> return $ addSolved ds eqn
-    ARet | p:ps <- pps -> do
-      (tp, tr) <- unArrow (getSLoc p) at
-      -- tCheckPatC dicts used in tcAlt solve
-      tCheckPatC tp p $ \ p' -> tcPats tr ps $ \ t' ps' -> ta t' (p' : ps')
-         | otherwise -> ta at []   -- base case, no more arguments, explicit or implicit
+    ARet at' ->
+      case pps of
+        p:ps -> do
+          (tp, tr) <- unArrow (getSLoc p) at'
+          -- tCheckPatC dicts used in tcAlt solve
+          tCheckPatC tp p $ \ p' -> tcPats tr ps $ \ t' ps' -> ta t' (p' : ps')
+        [] -> ta at' []   -- base case, no more arguments, explicit or implicit
 
 
 tcAlts :: HasCallStack => EType -> EAlts -> T EAlts
@@ -2648,6 +2690,7 @@ tcArm t tpat arm =
 
 tCheckExprAndSolve :: HasCallStack => EType -> Expr -> T Expr
 tCheckExprAndSolve t e = do
+--  traceM $ "tCheckExprAndSolve: " ++ show (e, t)
   (e', bs) <- solveLocalConstraints $ tCheckExpr t e
   if null bs then
     return e'
@@ -2802,7 +2845,7 @@ tcPat mt ae =
           true = eTrue loc
       tcPat mt $ EViewPat orFun true
 
-    _ -> error $ "tcPat: not handled " ++ show (getSLoc ae) ++ " " ++ show ae
+    _ -> error $ "tcPat: not handled " ++ prettyShow (getSLoc ae) ++ " " ++ showExpr ae
 
 -- The expected type is for (eApps afn (reverse args))
 tcPatAp :: HasCallStack =>
@@ -2820,7 +2863,7 @@ tcPatAp mt args afn =
 
     EParen e -> tcPatAp mt args e
 
-    _ -> tcError (getSLoc afn) ("Bad pattern " ++ show afn)
+    _ -> tcError (getSLoc afn) ("Bad pattern " ++ showExpr afn)
 
 tcPatApCon :: Expected -> [EPat] -> EPat -> EType -> T EPatRet
 tcPatApCon mt args con xpt = do
@@ -2843,7 +2886,7 @@ tcPatApCon mt args con xpt = do
       case xpt of
          -- Sanity check
          EForall _ _ EForall{} -> return ()
-         _ -> impossibleShow con
+         _ -> impossiblePP con
       EForall _ avs apt <- tInst' xpt
 
       (sks, spt) <- shallowSkolemise avs apt
@@ -2857,7 +2900,7 @@ tcPatApCon mt args con xpt = do
       let ary = arity pf
             where arity (ECon c) = conArity c
                   arity (EApp f _) = arity f - 1  -- deal with dictionary added above
-                  arity e = impossibleShow e
+                  arity e = impossiblePP e
       checkArity ary
 
       let step [] t r = return (t, r)
@@ -2911,9 +2954,9 @@ tcBindGrp' :: [EBind] -> T [EBind]
 tcBindGrp' bs = do
 --  traceM $ "tcBindGrp start: " ++ show (getSLoc bs, bs)
   let def (Fcn i _) = do t <- newUVar; return (i, t)
-      def d = impossibleShow d
-  xts <- mapM def bs                    -- add temporary types
+      def d = impossiblePP d
   oldState <- get
+  xts <- mapM def bs                    -- add temporary types
   extVals xts                           -- Extend the symbol table with the temporary types.
                                         -- These will be removed by the 'withExtVals' in 'tcBinds'
   bs' <- mapM tcBind bs                 -- type check bindings
@@ -2921,8 +2964,11 @@ tcBindGrp' bs = do
   --   first test for monomorphism restriction (cheap),
   --   next test if there are any new type variables in the return type (a little more expensive),
   --   finally test for type variables in the environment (expensive).
-  if not (all isSynFcn bs') then        -- monomorphism restriction, also ensures pattern bindings are not polymorphic
-    return bs'
+  -- Ensure pattern bindings are not polymorphic
+  let isDsPatBind (Fcn i _) = isPatBindVar i
+      isDsPatBind _ = False
+  if any isDsPatBind bs' then do
+     return bs'
    else do
     fvs <- getMetaTyVars (map snd xts)  -- all unification variables used in return type
     let u = unique oldState             -- first of the new type variables
@@ -2938,16 +2984,17 @@ tcBindGrp' bs = do
         return bs'
        else do
        -- Generalize
-       cs  <- gets constraints
-       cs' <- mapM (derefUVar . snd) cs
+       cs <- mapM (derefUVar . snd) =<< gets constraints
+       -- find constraints involving the local tyvars
+       let ctx = nubBy eqEType $
+                 filter (\ c -> not $ null $ intersect qvs' (metaTvs [c])) cs
        let multiParam ct = length (snd (getApp ct)) /= 1
-       if any multiParam cs' then       -- temporary workaround for 
+       if any multiParam ctx ||       -- temporary workaround for
+          -- Overloaded bind: fallback to monomorphic behavior
+          not (null ctx) && not (all isSynFcn bs') then
          return bs'
         else do
-        -- find constraints involving the local tyvars
-        let ctx = nubBy eqEType $
-                  filter (\ c -> not $ null $ intersect qvs' (metaTvs [c])) cs'
---        traceM $ "tcBindGrp: u=" ++ show u ++ " xts=" ++ show xts ++ " ts'=" ++ show ts' ++ " cs'=" ++ show cs'
+--        traceM $ "tcBindGrp: u=" ++ show u ++ " xts=" ++ show xts ++ " ts'=" ++ show ts' ++ " cs=" ++ show cs
 --        sub <- gets uvarSubst
 --        traceM $ "  subst=" ++ show (IM.toList sub)
         -- Compute actual type signatures.
@@ -3025,7 +3072,7 @@ dsType at =
     ELit _ (LStr _) -> at
     ELit _ (LInteger _) -> at
     EQVar _ _ -> at
-    _ -> impossibleShow at
+    _ -> impossiblePP at
 
 tListI :: SLoc -> Ident
 tListI loc = mkIdentSLoc loc nameList
@@ -3352,7 +3399,7 @@ splitPatSynType (EForall _ vks1 t0)
   | Just  (ctx1, EForall _ vks2 t1) <- getImplies t0
   , Just  (ctx2, ty) <- getImplies t1
   = (vks1, ctx1, vks2, ctx2, ty)
-splitPatSynType t = impossibleShow t
+splitPatSynType t = impossiblePP t
 
 -----
 
@@ -3380,7 +3427,7 @@ expandDict' avks actx edict acc = do
           when (isConIdent iCls) $
             --impossible
             -- XXX it seems we can get here, e.g., Control.Monad.Fail without Applicative import
-            impossibleShow (acc, iCls)
+            impossiblePP (acc, iCls)
           return [(edict, vks, ctx, cc, [])]
         Just (ClassInfo iks sups _ _ fds) -> do
           let
@@ -3404,7 +3451,7 @@ type Solved = (Ident, Expr)
 --  class MArray a m where
 --    op1 :: m a
 --    op2 :: a -> m ()
---  
+--
 --  foo :: forall a m . (Monad m, MArray a m) => m a
 --  foo = do
 --    aa <- op1
@@ -3474,7 +3521,7 @@ getSuperClasses ais = do
         case M.lookup i ct of
           Nothing -> error $ "getSuperClasses: " ++ show i
           Just (ClassInfo _ supers _ _ _) ->
-            loop done (concatMap flatten supers ++ is)
+            loop (i:done) (concatMap flatten supers ++ is)
       flatten a =
         case getApp a of
           (c, ts) ->
@@ -3483,21 +3530,20 @@ getSuperClasses ais = do
               Just _ -> concatMap flatten ts
   return $ loop [] ais
 
-
-
 {-
 showInstInfo :: InstInfo -> String
 showInstInfo (InstInfo m ds fds) = "InstInfo " ++ show (M.toList m) ++ " " ++ showListS showInstDict ds ++ show fds
 
 showInstDict :: InstDict -> String
-showInstDict (e, ctx, ts) = showExpr e ++ " :: " ++ show (addConstraints (ctx 10000) (tApps (mkIdent "_") ts))
+showInstDict (InstDict e ctxts) = showExpr e ++ " :: " ++ prettyShow (addConstraints ctx (tApps (mkIdent "_") ts))
+  where (ctx, ts) = ctxts 10000
 
-showInstDef :: InstDef -> String
+showInstDef :: (Ident, InstInfo) -> String
 showInstDef (cls, InstInfo m ds _) = "instDef " ++ show cls ++ ": "
             ++ show (M.toList m) ++ ", " ++ showListS showInstDict ds
 
-showMatch :: (Expr, [EConstraint]) -> String
-showMatch (e, ts) = show e ++ " " ++ show ts
+showMatch :: (Expr, [EConstraint], [Improve]) -> String
+showMatch (e, ts, _) = show e ++ " " ++ show ts
 
 showConstraint :: (Ident, EConstraint) -> String
 showConstraint (i, t) = show i ++ " :: " ++ show t
@@ -3557,7 +3603,7 @@ solveMany ((di, ct) : cnss) uns sol imp | Just (_, (dd, _)) <- find (eqEType ct 
   solveMany cnss uns ((ct, (di, EVar dd)) : sol) imp
 -- Need to handle ct of the form C => T, and forall a . T
 solveMany (cns@(di, ct) : cnss) uns sol imp = do
-  -- tcTrace ("solveMany: trying " ++ showEType ct)
+--  tcTrace ("solveMany: trying " ++ showEType ct)
   let loc = getSLoc di
       (iCls, cts) = getApp ct
       solver = head [ s | (p, s) <- solvers, p iCls ]
@@ -3566,17 +3612,18 @@ solveMany (cns@(di, ct) : cnss) uns sol imp = do
   -- This is important to find tupled dictionaries in recursive calls.
   case [ ai | (ai, act) <- ads, ct `eqEType` act ] of
     ai : _ -> do
-      --tcTrace $ "solve with arg " ++ show ct
+--      tcTrace $ "solve with arg " ++ show ct
       solveMany cnss uns ((ct, (di, EVar ai)) : sol) imp
     [] -> do
       msol <- solver loc iCls cts
-      --tcTrace ("solveMany msol=" ++ show msol)
+--      tcTrace ("solveMany msol=" ++ show msol)
       case msol of
         Nothing           -> solveMany        cnss  (cns : uns)                  sol         imp
         Just (de, gs, is) -> solveMany (gs ++ cnss)        uns ((ct, (di, de)) : sol) (is ++ imp)
 
 solveInst :: SolveOne
 solveInst loc iCls cts = do
+--  traceM $ "solveInst " ++ prettyShow cts
   it <- gets instTable
 --  tcTrace ("instances:\n" ++ unlines (map showInstDef (M.toList it)))
   -- XXX The solveGen&co functions are not in the T monad.
@@ -3587,7 +3634,7 @@ solveInst loc iCls cts = do
   case M.lookup iCls it of
     Nothing -> return Nothing   -- no instances, so no chance
     Just (InstInfo atomMap insts fds) -> do
-      -- tcTrace $ "solveInst: " ++ showIdent iCls ++ " atomMap size=" ++ show (M.size atomMap)
+--      tcTrace $ "solveInst: " ++ showIdent iCls ++ " atomMap size=" ++ show (M.size atomMap)
       case cts of
         [EVar i] -> do
           case M.lookup i atomMap of
@@ -3626,6 +3673,7 @@ solveGen uniq noAtoms fds insts loc iCls cts = do
 -- XXX should look for a direct (tupled) dictionary
 solveTuple :: SolveOne
 solveTuple loc _iCls cts = do
+--  traceM $ "solveTuple " ++ prettyShow cts
   goals <- mapM (\ c -> do { d <- newDictIdent loc; return (d, c) }) cts
   return $ Just (ETuple (map (EVar . fst) goals), goals, [])
 
@@ -3633,6 +3681,7 @@ solveTypeEq :: SolveOne
 -- If either type is a unification variable, just do the unification.
 solveTypeEq loc _iCls [t1, t2] | isEUVar t1 || isEUVar t2 = return $ Just (ETuple [], [], [(loc, t1, t2)])
                                | otherwise = do
+--  traceM $ "solveTypeEq " ++ prettyShow [t1, t2]
   eqs <- gets typeEqTable
   --tcTrace ("solveTypeEq eqs=" ++ show eqs)
   case solveEq eqs t1 t2 of
@@ -3647,6 +3696,7 @@ solveTypeEq _ _ _ = impossible
 
 solveCoercible :: HasCallStack => SolveOne
 solveCoercible loc iCls [t1, t2] = do
+--  traceM $ "solveCoercible " ++ prettyShow [t1, t2]
   -- pretend newtypes are type synonyms
   (t1', t2') <- withNewtypeAsSyns $
     (,) <$> expandSynNoChk t1 <*> expandSynNoChk t2
@@ -3691,7 +3741,7 @@ solveInstCoercible loc iCls t1 t2 = do
 
 -- Pretend newtypes are type synonyms.
 -- XXX It's rather inefficient to do this over and over.
--- XXX Cannot handle recursive newtypes
+-- XXX We give up on direct recursive newtypes.  Should do it for mutual recursion too.
 withNewtypeAsSyns :: T a -> T a
 withNewtypeAsSyns act = do
   st <- gets synTable  -- get old syntable
@@ -3703,9 +3753,9 @@ withNewtypeAsSyns act = do
           -- it could be visible.
           let t = either (snd . head) (snd . snd . head) et
 --          traceM $ "extNewtypeSyns: " ++ showIdent qi ++ show vs ++ " = " ++ showExprRaw t
-          when (qi `elem` allVarsExpr t) $
-            tcError (getSLoc qi) $ "Cannot handle recursive newtype: " ++ show qi
-          extSyn qi vs t  -- extend synonym table
+          unless (qi `elem` allVarsExpr t) $
+            -- Not directly recursive
+            extSyn qi vs t  -- extend synonym table
       ext _ = return ()
   mapM_ ext $ M.toList dt
 
@@ -3718,10 +3768,12 @@ isEUVar (EUVar _) = True
 isEUVar _ = False
 
 solveKnownNat :: SolveOne
+--solveKnownNat _ _ x | trace ("solveKnownNat: " ++ prettyShow x) False = undefined
 solveKnownNat loc iCls [e@(ELit _ (LInteger _))] = mkConstDict loc iCls e
 solveKnownNat loc iCls ts = solveInst loc iCls ts  -- look for a dict argument
 
 solveKnownSymbol :: SolveOne
+--solveKnownSymbol _ _ x | trace ("solveKnownSymbol: " ++ prettyShow x) False = undefined
 solveKnownSymbol loc iCls [e@(ELit _ (LStr _))] = mkConstDict loc iCls e
 solveKnownSymbol loc iCls ts = solveInst loc iCls ts  -- look for a dict argument
 
@@ -3742,7 +3794,7 @@ findMatches _ False _ _ _ [EUVar _] = []
 findMatches uniq _ loc fds ds its =
  let rrr =
        [ (length s, (de, map (substEUVar s) ctx, imp))
-       | (de, ctxts) <- ds
+       | (InstDict de ctxts) <- ds
        , let (ctx, ts) = ctxts uniq
        , Just (s, imp) <- [matchTypes loc ts its fds]
        ]
@@ -3765,9 +3817,11 @@ substEUVar _ _ = impossible
 matchTypes :: SLoc -> [EType] -> [EType] -> [IFunDep] -> Maybe (TySubst, [Improve])
 matchTypes _ ats ats' [] = do
   -- Simple special case when there are no fundeps.
+--  traceM $ "\nmatchTypes " ++ prettyShow (ats, ats') ++ show ats
   let loop r (t:ts) (t':ts') = matchType r t t' >>= \ r' -> loop r' ts ts'
       loop r _ _ = pure r
   s <- loop [] ats ats'
+--  traceM $ "\nmatchTypes " ++ prettyShow (ats, ats', s)
   pure (s, [])
 matchTypes loc ts ts' fds = asum $ map (matchTypesFD loc ts ts') fds
 
@@ -3812,10 +3866,12 @@ combineTySubsts = combs []
     comb1 v t r =
       case lookup v r of
         Nothing -> Just ((v, t) : r)
-        Just t' -> matchType [] t' t
+        Just t' -> matchType r t' t
 
 -- Get the best matches.  These are the matches with the smallest substitution.
 -- Always prefer arguments rather than global instances.
+-- If there are multiple alternatives with the args, just pick one.
+-- This can arise from diamonds in the superclass chain.
 getBestMatches :: [(Int, (Expr, [EConstraint], [Improve]))] -> [(Expr, [EConstraint], [Improve])]
 getBestMatches [] = []
 getBestMatches ams =
@@ -3825,7 +3881,7 @@ getBestMatches ams =
       pick ms =
         let b = minimum (map fst ms)         -- minimum substitution size
         in  [ ec | (s, ec) <- ms, s == b ]   -- pick out the smallest
-  in  if null args then pick insts else pick args
+  in  if null args then pick insts else take 1 (pick args)
 
 -- Check that there are no unsolved constraints.
 checkConstraints :: HasCallStack => T ()
@@ -3835,9 +3891,17 @@ checkConstraints = do
     [] -> return ()
     (i, t) : _ -> do
       t' <- derefUVar t
---      is <- gets instTable
---      tcTrace $ "Cannot satisfy constraint: " ++ unlines (map (\ (i, ii) -> show i ++ ":\n" ++ showInstInfo ii) (M.toList is))
-      tcError (getSLoc i) $ "Cannot satisfy constraint: " ++ show t'
+{-
+      is <- gets instTable
+      traceM $ "Cannot satisfy constraint: " ++ unlines (map (\ (xi, ii) -> show xi ++ ":\n  " ++ showInstInfo ii) (M.toList is))
+      let EApp (EVar xi) _ = t'
+          Just ii = M.lookup xi is
+      traceM ("lookup " ++ showInstInfo ii)
+      solveConstraints
+      cs' <- gets constraints
+      traceM (show (length cs, length cs'))
+-}
+      tcError (getSLoc i) $ "Cannot satisfy constraint: " ++ showExpr t'
                             ++ "\n     fully qualified: " ++ showExprRaw t'
 
 -- Add a type equality constraint.
@@ -3955,12 +4019,6 @@ doDeriving def@(Class _ (n, _) _ _) | unIdent n /= "~" && deriveClassTypeable = 
   return [def, mkTypeableInst mn n]
 doDeriving def                        = return [def]
 
-{-
-addTypeable' :: SLoc -> [Deriving] -> [Deriving]
-addTypeable' loc ds =
-  let ds' = addTypeable loc ds
-  in  trace ("addTypeable: " ++ show (ds, ds')) ds'
--}
 -- Add Data.Typeable to the derivings.
 -- Also skip all derivings (including Typeable) if it is says 'deriving ()'
 addTypeable :: SLoc -> [Deriving] -> [Deriving]

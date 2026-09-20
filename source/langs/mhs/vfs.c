@@ -38,6 +38,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <stdint.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 #include <errno.h>
 #include <libgen.h>
 #include <unistd.h>
@@ -1145,4 +1149,51 @@ int vfs_closedir(DIR* dirp) {
     }
 
     return closedir(dirp);
+}
+
+/* ============================================================================
+ * Compile cache
+ * ============================================================================ */
+
+#define MHS_CACHE_FILE ".mhscache"
+
+/* Path of the running binary, which is where the packages are embedded. */
+static int mhs_exe_path(char *buf, size_t size) {
+#if defined(__APPLE__)
+    uint32_t n = (uint32_t)size;
+    return _NSGetExecutablePath(buf, &n) == 0 ? 0 : -1;
+#elif defined(__linux__)
+    ssize_t n = readlink("/proc/self/exe", buf, size - 1);
+    if (n <= 0) return -1;
+    buf[n] = '\0';
+    return 0;
+#else
+    (void)buf;
+    (void)size;
+    return -1;
+#endif
+}
+
+int mhs_cache_is_cold(void) {
+    struct stat cache_st;
+    if (stat(MHS_CACHE_FILE, &cache_st) != 0) return 1;
+
+    /* A run killed mid-save leaves a zero-length cache. mhs then aborts on it
+       and never rewrites it, so drop it here. */
+    if (cache_st.st_size == 0) {
+        remove(MHS_CACHE_FILE);
+        return 1;
+    }
+
+    char exe[1024];
+    struct stat exe_st;
+    if (mhs_exe_path(exe, sizeof(exe)) != 0 || stat(exe, &exe_st) != 0) return 1;
+
+    /* A newer binary can carry different packages, and the cached copies are
+       never validated against it. Start over rather than mix the two. */
+    if (exe_st.st_mtime >= cache_st.st_mtime) {
+        remove(MHS_CACHE_FILE);
+        return 1;
+    }
+    return 0;
 }

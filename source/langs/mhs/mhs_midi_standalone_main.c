@@ -141,15 +141,19 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    int cold = mhs_cache_is_cold();
+
     int j = 0;
     new_argv[j++] = argv[0];
-    new_argv[j++] = "-C";  /* Enable caching for faster startup */
+    new_argv[j++] = cold ? "-C" : "-CR";  /* Warm cache: read, do not rewrite */
 
 #ifdef VFS_USE_PKG
     /* Package mode: add package search path and preload packages */
     new_argv[j++] = "-a/mhs-embedded";  /* Package search path */
-    new_argv[j++] = "-pbase";           /* Preload base package */
-    new_argv[j++] = "-pmusic";          /* Preload music package */
+    if (cold) {
+        new_argv[j++] = "-pbase";       /* Preload base package */
+        new_argv[j++] = "-pmusic";      /* Preload music package */
+    }
 #endif
 
     /* Add linker flags for MIDI libraries if compiling to executable */

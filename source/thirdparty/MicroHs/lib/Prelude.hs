@@ -21,15 +21,13 @@ module Prelude(
   module Data.Integral,
   module Data.List,
   module Data.Maybe,
-  module Data.Monoid,
+  module Data.Monoid.Internal,
   module Data.Num,
   module Data.Ord,
   module Data.Ratio,
   module Data.Real,
   module Data.RealFloat,
   module Data.RealFrac,
-  module Data.Records,
-  module Data.Semigroup,
   module Data.String,
   module Data.Traversable,
   module Data.Tuple,
@@ -59,7 +57,7 @@ import Data.Enum(Enum(..))
 import Data.Eq(Eq(..))
 import Data.Float(Float)
 import Data.Floating(Floating(..))
-import Data.Foldable(Foldable)
+import Data.Foldable(Foldable(foldMap))
 import Data.Fractional(Fractional(..), (^^), realToFrac)
 import Data.Function(id, const, (.), flip, ($), seq, ($!), until, asTypeOf)
 import Data.Functor(Functor(..), (<$>))
@@ -74,17 +72,15 @@ import Data.List([](..), map, (++), filter, head, last, tail, init, null, length
                  elem, notElem, lookup, zip, zip3, zipWith, zipWith3, unzip, unzip3,
                  lines, words, unlines, unwords)
 import Data.Maybe(Maybe(..), maybe)
-import Data.Monoid(Monoid(..))
+import Data.Monoid.Internal(Monoid(..), Semigroup((<>)))
 import Data.Num(Num(..), subtract)
 import Data.Ord(Ord(..), Ordering(..))
 import Data.Ratio(Rational)
 import Data.Real(Real(..))
 import Data.RealFloat(RealFloat(..))
 import Data.RealFrac(RealFrac(..))
-import Data.Records  -- XXX redo this somehow
-import Data.Semigroup(Semigroup((<>)))
 import Data.String(IsString(..), lines, unlines, words, unwords)
-import Data.Traversable(Traversable)
+import Data.Traversable(Traversable(traverse, sequenceA))
 import Data.Tuple(fst, snd, curry, uncurry)
 import Data.Word.Word(Word)
 import System.IO(IO, putChar, putStr, putStrLn, print, getChar, getLine, getContents, interact,

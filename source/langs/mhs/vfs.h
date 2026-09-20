@@ -60,4 +60,16 @@ struct dirent* vfs_readdir(DIR* dirp);
 /* Close directory */
 int vfs_closedir(DIR* dirp);
 
+/* Whether .mhscache holds nothing worth reusing: it is missing, empty, or
+ * older than this binary, which can carry different embedded packages. The
+ * empty and stale cases are deleted here.
+ *
+ * Callers use this to pick both the cache flag and the preload flags. A cold
+ * run takes -C and -pbase -pmusic, so the packages land in the cache. A warm
+ * run takes -CR and no -p: the packages are already cached, mhs appends
+ * another copy of each on every -p run without checking, and writing the
+ * cache back costs ~1.8s of LZMA for a file that would not change.
+ */
+int mhs_cache_is_cold(void);
+
 #endif /* VFS_H */

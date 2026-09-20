@@ -1,5 +1,6 @@
 module Data.Text(
   Text,
+  StrictText,
   pack, unpack,
   show,
   empty,
@@ -16,6 +17,9 @@ module Data.Text(
   splitOn,
   dropWhileEnd,
   words,
+  unwords,
+  toLower,
+  toUpper,
   foldr,
   concat,
   lines,
@@ -29,19 +33,25 @@ module Data.Text(
   isPrefixOf,
   isSuffixOf,
   isInfixOf,
+  replace,
   map,
+  dropAround,
+  strip,
+  stripStart,
+  stripEnd,
+  stripPrefix,
+  stripSuffix,
   ) where
-import qualified Prelude(); import MiniPrelude hiding(head, tail, null, length, words, map)
-import Primitives(Ptr)
+import qualified Prelude(); import MiniPrelude hiding(head, tail, null, length, words, unwords, map)
 import Control.DeepSeq.Class
+import qualified Data.Char as C
 import qualified Data.List as L
-import Data.Monoid.Internal
 import Data.String
 import qualified Data.ByteString.Internal as BS
-import Foreign.C.Types(CChar)
-import Unsafe.Coerce(unsafeCoerce)
+import Data.Text.Internal
+import Text.Read.Internal
 
-newtype Text = T BS.ByteString
+type StrictText = Text
 
 instance Eq Text where
   (==) = cmp (==)
@@ -58,6 +68,9 @@ show = pack . MiniPrelude.show
 
 cmp :: (BS.ByteString -> BS.ByteString -> Bool) -> (Text -> Text -> Bool)
 cmp op (T x) (T y) = op x y
+
+instance Read Text where
+  readsPrec p str = [(pack x, y) | (x, y) <- readsPrec p str]
 
 instance Show Text where
   showsPrec p = showsPrec p . unpack
@@ -81,10 +94,10 @@ singleton :: Char -> Text
 singleton c = pack [c]
 
 pack :: String -> Text
-pack s = T (_primitive "toUTF8" s)
+pack = T . BS.packUTF8
 
 unpack :: Text -> String
-unpack (T t) = _primitive "fromUTF8" t
+unpack (T t) = BS.primBSfromUTF8 t
 
 append :: Text -> Text -> Text
 append (T x) (T y) = T (BS.append x y)
@@ -98,7 +111,7 @@ length = L.length . unpack
 head :: Text -> Char
 head (T t)
   | BS.null t = error "Data.Text.head: empty"
-  | otherwise = _primitive "headUTF8" t
+  | otherwise = BS.primBSheadUTF8 t
 
 cons :: Char -> Text -> Text
 cons c t = singleton c `append` t
@@ -109,7 +122,7 @@ snoc t c = t `append` singleton c
 tail :: Text -> Text
 tail (T t)
   | BS.null t = error "Data.Text.tail: empty"
-  | otherwise = _primitive "tailUTF8" t
+  | otherwise = T (BS.primBStailUTF8 t)
 
 uncons :: Text -> Maybe (Char, Text)
 uncons t | null t    = Nothing
@@ -135,6 +148,15 @@ splitOnList sep = loop []
 words :: Text -> [Text]
 words = L.map pack . L.words . unpack
 
+unwords :: [Text] -> Text
+unwords = pack . L.unwords . L.map unpack
+
+toLower :: Text -> Text
+toLower = pack . L.map C.toLower . unpack
+
+toUpper :: Text -> Text
+toUpper = pack . L.map C.toUpper . unpack
+
 foldr :: (Char -> a -> a) -> a -> Text -> a
 foldr f z = L.foldr f z . unpack
 
@@ -158,6 +180,9 @@ intercalate _ [] = empty
 intercalate _ [x] = x
 intercalate s (x:xs) = x `append` s `append` intercalate s xs
 
+replace :: Text -> Text -> Text -> Text
+replace s r = intercalate r . splitOn s
+
 -- XXX Should make the BS version efficient and go via that
 isPrefixOf :: Text -> Text -> Bool
 isPrefixOf p s = L.isPrefixOf (unpack p) (unpack s)
@@ -176,3 +201,21 @@ takeWhile p = pack . L.takeWhile p . unpack
 
 map :: (Char -> Char) -> Text -> Text
 map f = pack . L.map f . unpack
+
+dropAround :: (Char -> Bool) -> Text -> Text
+dropAround p = dropWhile p . dropWhileEnd p
+
+stripStart :: Text -> Text
+stripStart = dropWhile C.isSpace
+
+stripEnd :: Text -> Text
+stripEnd = dropWhileEnd C.isSpace
+
+strip :: Text -> Text
+strip = dropAround C.isSpace
+
+stripPrefix :: Text -> Text -> Maybe Text
+stripPrefix p t = pack <$> L.stripPrefix (unpack p) (unpack t)
+
+stripSuffix :: Text -> Text -> Maybe Text
+stripSuffix p t = pack <$> L.stripSuffix (unpack p) (unpack t)
