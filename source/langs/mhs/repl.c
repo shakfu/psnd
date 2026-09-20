@@ -30,11 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
-#include <sys/stat.h>
-#ifdef __APPLE__
-#include <mach-o/dyld.h>
-#endif
+#include <ctype.h>
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -817,77 +813,131 @@ static int needs_extraction(int argc, char **argv) {
 }
 #endif /* MHS_NO_COMPILATION */
 
-#ifdef MHS_USE_PKG
-#define MHS_CACHE_FILE ".mhscache"
+/* A source file passed to mhs by path is cached under that path ("Foo.hs"),
+   while the cache validator looks the entry up under the module's declared name
+   ("Foo"), finds nothing, and checks nothing. The file can then change and mhs
+   keeps running the code it compiled the first time. Naming the module instead,
+   with -i for the directory it sits in, keeps the checksum check alive. */
+typedef struct {
+    int  ok;
+    char module[256];
+    char include[1024];
+} MhsSrcArg;
 
-/* Path of the running psnd binary, which is where the packages are embedded. */
-static int mhs_exe_path(char *buf, size_t size) {
-#if defined(__APPLE__)
-    uint32_t n = (uint32_t)size;
-    return _NSGetExecutablePath(buf, &n) == 0 ? 0 : -1;
-#elif defined(__linux__)
-    ssize_t n = readlink("/proc/self/exe", buf, size - 1);
-    if (n <= 0) return -1;
-    buf[n] = '\0';
-    return 0;
-#else
-    (void)buf;
-    (void)size;
-    return -1;
-#endif
+/* Fill src from a path, or leave src->ok at 0 to pass the path through. */
+static void mhs_src_arg_init(MhsSrcArg *src, const char *path) {
+    src->ok = 0;
+
+    size_t len = strlen(path);
+    if (len < 4 || strcmp(path + len - 3, ".hs") != 0) return;
+
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    char head[8192];
+    size_t n = fread(head, 1, sizeof(head) - 1, f);
+    fclose(f);
+    head[n] = '\0';
+
+    /* Skip layout, line comments and nested block comments to reach `module`. */
+    const char *p = head, *end = head + n;
+    while (p < end) {
+        if (isspace((unsigned char)*p)) {
+            p++;
+        } else if (end - p > 1 && p[0] == '-' && p[1] == '-') {
+            while (p < end && *p != '\n') p++;
+        } else if (end - p > 1 && p[0] == '{' && p[1] == '-') {
+            int depth = 1;
+            p += 2;
+            while (p < end && depth > 0) {
+                if (end - p > 1 && p[0] == '{' && p[1] == '-') { depth++; p += 2; }
+                else if (end - p > 1 && p[0] == '-' && p[1] == '}') { depth--; p += 2; }
+                else p++;
+            }
+        } else {
+            break;
+        }
+    }
+    if (end - p < 8 || strncmp(p, "module", 6) != 0 || !isspace((unsigned char)p[6])) return;
+    p += 6;
+    while (p < end && isspace((unsigned char)*p)) p++;
+
+    size_t mlen = 0;
+    while (p + mlen < end &&
+           (isalnum((unsigned char)p[mlen]) || p[mlen] == '_' || p[mlen] == '.' ||
+            p[mlen] == '\'')) {
+        mlen++;
+    }
+    if (mlen == 0 || mlen >= sizeof(src->module)) return;
+    memcpy(src->module, p, mlen);
+    src->module[mlen] = '\0';
+
+    /* The declared name fixes where the file must sit: A.B lives in A/B.hs.
+       If the path disagrees, mhs could not find the module by name. */
+    char suffix[sizeof(src->module) + 4];
+    for (size_t i = 0; i < mlen; i++) {
+        suffix[i] = src->module[i] == '.' ? '/' : src->module[i];
+    }
+    memcpy(suffix + mlen, ".hs", 4);
+
+    size_t slen = mlen + 3;
+    if (slen > len || strcmp(path + len - slen, suffix) != 0) return;
+
+    size_t rootlen = len - slen;
+    if (rootlen > 0 && path[rootlen - 1] != '/') return;
+    while (rootlen > 1 && path[rootlen - 1] == '/') rootlen--;
+
+    if (rootlen == 0) {
+        snprintf(src->include, sizeof(src->include), "-i.");
+    } else {
+        if (rootlen + 3 > sizeof(src->include)) return;
+        memcpy(src->include, "-i", 2);
+        memcpy(src->include + 2, path, rootlen);
+        src->include[2 + rootlen] = '\0';
+    }
+    src->ok = 1;
 }
 
-/* MicroHs appends the -p packages to .mhscache on every run without checking
-   whether the cache it just read already holds them, so preloading against a
-   warm cache costs ~2MB and a second of load time per run, without bound. The
-   packages survive in the cache, so only preload when there is nothing usable
-   to reuse. */
-static int mhs_need_preload(void) {
-    struct stat cache_st;
-    if (stat(MHS_CACHE_FILE, &cache_st) != 0) return 1;
-
-    /* A run killed mid-save leaves a zero-length cache. mhs then aborts on it
-       and never rewrites it, so drop it here. */
-    if (cache_st.st_size == 0) {
-        remove(MHS_CACHE_FILE);
-        return 1;
+/* Copy the user's mhs arguments, rewriting the first source path to its module
+   form. Returns the new argv index. */
+static int mhs_copy_user_args(char **new_argv, int j, MhsReplArgs *args,
+                              MhsSrcArg *src) {
+    for (int i = 1; i < args->mhs_argc; i++) {
+        if (!src->ok) {
+            mhs_src_arg_init(src, args->mhs_argv[i]);
+            if (src->ok) {
+                new_argv[j++] = src->include;
+                new_argv[j++] = src->module;
+                continue;
+            }
+        }
+        new_argv[j++] = args->mhs_argv[i];
     }
-
-    char exe[1024];
-    struct stat exe_st;
-    if (mhs_exe_path(exe, sizeof(exe)) != 0 || stat(exe, &exe_st) != 0) return 1;
-
-    /* A newer binary can carry different packages, and the cached copies are
-       never validated against it. Start over rather than mix the two. */
-    if (exe_st.st_mtime >= cache_st.st_mtime) {
-        remove(MHS_CACHE_FILE);
-        return 1;
-    }
-    return 0;
+    return j;
 }
-#endif /* MHS_USE_PKG */
 
 static char **build_mhs_argv(MhsReplArgs *args, int *out_argc, char *path_buf1,
-                             char *path_buf2, size_t buf_size) {
+                             char *path_buf2, size_t buf_size, MhsSrcArg *src) {
     /* Calculate total args needed */
 #ifdef MHS_USE_PKG
-    int extra_args = 4;  /* -C, -a<path>, and up to two -p flags */
+    int extra_args = 5;  /* -C, -a<path>, up to two -p flags, -i<src dir> */
 #else
-    int extra_args = 3;  /* -C, -i<path>, -i<path>/lib */
+    int extra_args = 4;  /* -C, -i<path>, -i<path>/lib, -i<src dir> */
 #endif
 
     int new_argc = args->mhs_argc + extra_args;
     char **new_argv = malloc((new_argc + 1) * sizeof(char *));
     if (!new_argv) return NULL;
 
+    int cold = mhs_cache_is_cold();
+
     int j = 0;
     new_argv[j++] = "mhs";
-    new_argv[j++] = "-C";  /* Enable caching */
+    new_argv[j++] = cold ? "-C" : "-CR";
 
 #ifdef MHS_USE_PKG
     snprintf(path_buf1, buf_size, "-a%s", VFS_VIRTUAL_ROOT);
     new_argv[j++] = path_buf1;
-    if (mhs_need_preload()) {
+    if (cold) {
         new_argv[j++] = "-pbase";
         new_argv[j++] = "-pmusic";
     }
@@ -899,9 +949,7 @@ static char **build_mhs_argv(MhsReplArgs *args, int *out_argc, char *path_buf1,
 #endif
 
     /* Copy user's MHS arguments (skip argv[0] which is already "mhs") */
-    for (int i = 1; i < args->mhs_argc; i++) {
-        new_argv[j++] = args->mhs_argv[i];
-    }
+    j = mhs_copy_user_args(new_argv, j, args, src);
     new_argv[j] = NULL;
 
     *out_argc = j;
@@ -1024,8 +1072,10 @@ int mhs_repl_main(int argc, char **argv) {
     set_env("MHSDIR", VFS_VIRTUAL_ROOT);
 
     char path_buf1[512], path_buf2[512];
+    MhsSrcArg src = { 0, "", "" };
     int new_argc;
-    char **new_argv = build_mhs_argv(&args, &new_argc, path_buf1, path_buf2, sizeof(path_buf1));
+    char **new_argv = build_mhs_argv(&args, &new_argc, path_buf1, path_buf2,
+                                     sizeof(path_buf1), &src);
     if (!new_argv) {
         fprintf(stderr, "Error: Memory allocation failed\n");
         cleanup_midi_for_repl();
@@ -1072,17 +1122,19 @@ int mhs_repl_main(int argc, char **argv) {
         set_env("MHSDIR", VFS_VIRTUAL_ROOT);
     }
 
-    /* Build argv for MHS */
+    /* Build argv for MHS. The count must cover every -optl pair pushed below:
+       three static libraries, then seven pairs on macOS (three frameworks plus
+       -lc++) or four elsewhere. */
 #ifdef __APPLE__
-    #define LINK_EXTRA_ARGS 14
+    #define LINK_EXTRA_ARGS 20
 #else
     #define LINK_EXTRA_ARGS 14
 #endif
 
 #ifdef MHS_USE_PKG
-    int extra_args = 4;
+    int extra_args = 5;   /* -C, -a<path>, two -p flags, -i<src dir> */
 #else
-    int extra_args = 3;
+    int extra_args = 4;   /* -C, two -i<path>, -i<src dir> */
 #endif
     if (linking_midi) {
         extra_args += LINK_EXTRA_ARGS;
@@ -1105,9 +1157,11 @@ int mhs_repl_main(int argc, char **argv) {
         return 1;
     }
 
+    int cold = mhs_cache_is_cold();
+
     int j = 0;
     new_argv[j++] = "mhs";
-    new_argv[j++] = "-C";
+    new_argv[j++] = cold ? "-C" : "-CR";
 
 #ifdef MHS_USE_PKG
     if (temp_dir) {
@@ -1116,7 +1170,7 @@ int mhs_repl_main(int argc, char **argv) {
         snprintf(path_arg1, sizeof(path_arg1), "-a%s", VFS_VIRTUAL_ROOT);
     }
     new_argv[j++] = path_arg1;
-    if (mhs_need_preload()) {
+    if (cold) {
         new_argv[j++] = "-pbase";
         new_argv[j++] = "-pmusic";
     }
@@ -1171,9 +1225,8 @@ int mhs_repl_main(int argc, char **argv) {
 #endif
     }
 
-    for (int i = 1; i < args.mhs_argc; i++) {
-        new_argv[j++] = args.mhs_argv[i];
-    }
+    MhsSrcArg src = { 0, "", "" };
+    j = mhs_copy_user_args(new_argv, j, &args, &src);
     new_argv[j] = NULL;
     new_argc = j;
 
@@ -1259,9 +1312,9 @@ int mhs_play_main(int argc, char **argv) {
 
     /* Build argv for MHS run */
 #ifdef MHS_USE_PKG
-    int extra_args = 5;
+    int extra_args = 6;   /* -C, -a<path>, two -p flags, -i<src dir>, -r */
 #else
-    int extra_args = 4;
+    int extra_args = 5;   /* -C, two -i<path>, -i<src dir>, -r */
 #endif
     int new_argc = 1 + extra_args + 1;
     char **new_argv = malloc((new_argc + 1) * sizeof(char *));
@@ -1274,14 +1327,16 @@ int mhs_play_main(int argc, char **argv) {
         return 1;
     }
 
+    int cold = mhs_cache_is_cold();
+
     int j = 0;
     new_argv[j++] = "mhs";
-    new_argv[j++] = "-C";
+    new_argv[j++] = cold ? "-C" : "-CR";
 
 #ifdef MHS_USE_PKG
     snprintf(path_arg1, sizeof(path_arg1), "-a%s", VFS_VIRTUAL_ROOT);
     new_argv[j++] = path_arg1;
-    if (mhs_need_preload()) {
+    if (cold) {
         new_argv[j++] = "-pbase";
         new_argv[j++] = "-pmusic";
     }
@@ -1291,8 +1346,16 @@ int mhs_play_main(int argc, char **argv) {
     new_argv[j++] = path_arg1;
     new_argv[j++] = path_arg2;
 #endif
-    new_argv[j++] = "-r";
-    new_argv[j++] = (char *)input_file;
+    MhsSrcArg src;
+    mhs_src_arg_init(&src, input_file);
+    if (src.ok) {
+        new_argv[j++] = src.include;
+        new_argv[j++] = "-r";
+        new_argv[j++] = src.module;
+    } else {
+        new_argv[j++] = "-r";
+        new_argv[j++] = (char *)input_file;
+    }
     new_argv[j] = NULL;
 
     if (args.verbose) {

@@ -1069,6 +1069,7 @@ static void print_usage(const char* prog) {
     printf("  --runtime <dir>     Embed runtime C/H files from <dir>\n");
     printf("  --lib <file>        Embed a library file (.a) in lib/ (repeatable)\n");
     printf("  --header <file>     Embed a header file in src/runtime/ (repeatable)\n");
+    printf("  --conf <file>       Embed mhs.conf at the virtual root\n");
 #ifndef MHS_EMBED_NO_ZSTD
     printf("  --dict-size <bytes> Dictionary size (default: %d)\n", DEFAULT_DICT_SIZE);
     printf("  --level <1-22>      Compression level (default: %d)\n", DEFAULT_COMP_LEVEL);
@@ -1107,6 +1108,7 @@ int main(int argc, char** argv) {
 
     const char* lib_files[64];
     const char* header_files[64];
+    const char* conf_file = NULL;
     const char* pkg_files[64];
     const char* music_modules[64];
     int lib_count = 0, header_count = 0, pkg_count = 0, music_count = 0;
@@ -1131,6 +1133,12 @@ int main(int argc, char** argv) {
                 return 1;
             }
             lib_files[lib_count++] = argv[++i];
+        } else if (strcmp(argv[i], "--conf") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: --conf requires an argument\n");
+                return 1;
+            }
+            conf_file = argv[++i];
         } else if (strcmp(argv[i], "--header") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: --header requires an argument\n");
@@ -1202,6 +1210,15 @@ int main(int argc, char** argv) {
     if (runtime_dir) {
         printf("Collecting runtime files from %s...\n", runtime_dir);
         collect_runtime_files(runtime_dir);
+    }
+
+    /* mhs reads <mhsdir>/mhs.conf for the target's cc and linker flags. Without
+       it the compile-to-executable path fails with "Cannot find config section". */
+    if (conf_file) {
+        printf("Embedding config: %s\n", conf_file);
+        if (add_file_with_type("mhs.conf", conf_file, FILE_TYPE_RUNTIME) != 0) {
+            return 1;
+        }
     }
 
     if (header_count > 0) {

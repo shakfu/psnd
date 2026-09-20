@@ -740,6 +740,7 @@ add_custom_command(
         --no-compress
         --runtime ${MHS_RUNTIME}
         --header ${CMAKE_CURRENT_SOURCE_DIR}/midi_ffi.h
+        --conf ${MHS_DIR}/mhs.conf
         --lib ${CMAKE_BINARY_DIR}/source/thirdparty/libremidi/liblibremidi.a
         --lib ${CMAKE_BINARY_DIR}/langs/mhs/libmidi_ffi.a
         --lib ${CMAKE_BINARY_DIR}/source/core/libmusic_theory.a
@@ -770,6 +771,7 @@ add_custom_command(
         ${MIDI_LIB_DIR}
         --runtime ${MHS_RUNTIME}
         --header ${CMAKE_CURRENT_SOURCE_DIR}/midi_ffi.h
+        --conf ${MHS_DIR}/mhs.conf
         --lib ${CMAKE_BINARY_DIR}/source/thirdparty/libremidi/liblibremidi.a
         --lib ${CMAKE_BINARY_DIR}/langs/mhs/libmidi_ffi.a
         --lib ${CMAKE_BINARY_DIR}/source/core/libmusic_theory.a
@@ -837,7 +839,7 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E env "MHSDIR=${MHS_DIR}"
         ${MHS_COMPILER} -Q ${DIST_BASE_PKG} ${BASE_DIR}
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${MHS_RUNTIME} ${MHS_DATA_DIR}/src/runtime
-    COMMAND ${CMAKE_COMMAND} -E copy ${MHS_DIR}/targets.conf ${MHS_DATA_DIR}/
+    COMMAND ${CMAKE_COMMAND} -E copy ${MHS_DIR}/mhs.conf ${MHS_DATA_DIR}/
     COMMAND ${CMAKE_COMMAND} -E touch ${LOCAL_MCABAL_STAMP}
     DEPENDS ${MHS_COMPILER}
     COMMENT "Installing MicroHs packages to build/mcabal"
@@ -886,6 +888,7 @@ add_custom_command(
         --lib ${CMAKE_BINARY_DIR}/langs/mhs/libmidi_ffi.a
         --lib ${CMAKE_BINARY_DIR}/source/core/libmusic_theory.a
         --header ${CMAKE_CURRENT_SOURCE_DIR}/midi_ffi.h
+        --conf ${MHS_DIR}/mhs.conf
     DEPENDS
         ${MHS_EMBED}
         ${MHS_COMPILER}
@@ -917,6 +920,7 @@ add_custom_command(
         --lib ${CMAKE_BINARY_DIR}/langs/mhs/libmidi_ffi.a
         --lib ${CMAKE_BINARY_DIR}/source/core/libmusic_theory.a
         --header ${CMAKE_CURRENT_SOURCE_DIR}/midi_ffi.h
+        --conf ${MHS_DIR}/mhs.conf
     DEPENDS
         ${MHS_EMBED}
         ${MHS_COMPILER}
@@ -1184,6 +1188,7 @@ if(ENABLE_MHS_INTEGRATION AND NOT WIN32)
                         --music-modules music-0.1.0.pkg:Async,Midi,MidiPerform,Music,MusicPerform
                         --runtime ${MHS_DATA_DIR}/src/runtime
                         --header ${CMAKE_CURRENT_SOURCE_DIR}/midi_ffi.h
+                        --conf ${MHS_DIR}/mhs.conf
                     DEPENDS ${MHS_EMBED} ${MHS_COMPILER} ${MUSIC_PKG_SOURCES} ${CMAKE_CURRENT_SOURCE_DIR}/midi_ffi.h
                     COMMENT "Generating mhs_psnd_pkg_zstd.h (packages, no libs)"
                     VERBATIM
@@ -1202,6 +1207,7 @@ if(ENABLE_MHS_INTEGRATION AND NOT WIN32)
                         --music-modules music-0.1.0.pkg:Async,Midi,MidiPerform,Music,MusicPerform
                         --runtime ${MHS_DATA_DIR}/src/runtime
                         --header ${CMAKE_CURRENT_SOURCE_DIR}/midi_ffi.h
+                        --conf ${MHS_DIR}/mhs.conf
                     DEPENDS ${MHS_EMBED} ${MHS_COMPILER} ${MUSIC_PKG_SOURCES} ${CMAKE_CURRENT_SOURCE_DIR}/midi_ffi.h
                     COMMENT "Generating mhs_psnd_pkg.h (packages, no libs)"
                     VERBATIM
@@ -1219,6 +1225,7 @@ if(ENABLE_MHS_INTEGRATION AND NOT WIN32)
                         ${MIDI_LIB_DIR}
                         --runtime ${MHS_RUNTIME}
                         --header ${CMAKE_CURRENT_SOURCE_DIR}/midi_ffi.h
+                        --conf ${MHS_DIR}/mhs.conf
                     DEPENDS ${MHS_EMBED} ${CMAKE_CURRENT_SOURCE_DIR}/midi_ffi.h
                     COMMENT "Generating mhs_psnd_src_zstd.h (sources, no libs)"
                     VERBATIM
@@ -1234,6 +1241,7 @@ if(ENABLE_MHS_INTEGRATION AND NOT WIN32)
                         --no-compress
                         --runtime ${MHS_RUNTIME}
                         --header ${CMAKE_CURRENT_SOURCE_DIR}/midi_ffi.h
+                        --conf ${MHS_DIR}/mhs.conf
                     DEPENDS ${MHS_EMBED} ${CMAKE_CURRENT_SOURCE_DIR}/midi_ffi.h
                     COMMENT "Generating mhs_psnd_src.h (sources, no libs)"
                     VERBATIM

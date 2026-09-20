@@ -1,17 +1,64 @@
 # Updating Vendored MicroHs
 
-Status: **investigation**. Written 2026-09-01 against psnd `30a3a47`.
-The preparatory work in the last section is done; the version bump is not.
+Status: **done**. The bump to `v0.16.5.0` landed 2026-09-20. Sections below
+that read as forecasts were written 2026-09-01 against psnd `30a3a47`; where
+the forecast was wrong, the correction is marked.
 
-## Recommendation
+## Outcome
 
-Defer the version bump. Do the decoupling work in [Preparatory work](#preparatory-work) first.
+`0.15.0.0` -> `0.16.5.0` on Path A, keeping the VFS. All 79 ctest tests pass,
+including `mhs_smoke_tests`, and `psnd mhs -o exe file.hs` produces a working
+binary.
 
-The mechanical part of the bump is cheap and low-risk. The blocking part is a semantic
-change to `MHSDIR` that breaks psnd's default package-embedding mode and requires
-redesigning how the embedded interpreter finds `base.pkg`. Upstream added a native
-facility for exactly that job (`--embed-packages`), which is the right destination, but
-adopting it is a refactor of ~2500 lines of psnd-specific code, not a version bump.
+Three things needed work, none of them the predicted blocker:
+
+- `mhs.conf` had to be embedded in the VFS. Without it the compile-to-executable
+  path dies on `Cannot find config section: unix`, where 0.15.0.0 only warned.
+- `LINK_EXTRA_ARGS` in `repl.c` undercounted macOS link flags by six, so the
+  argv array overflowed on every `-o` compile. Pre-existing, exposed by the
+  first `-o` test run under the new compiler.
+- Upstream tarball mtimes predate the build tree, so `cp -a` left every
+  generated file looking current. The build then linked a 0.15 `mhs.c` against
+  a 0.16 `eval.c` and failed with `ERR: version mismatch`. Touch the tree after
+  copying.
+
+## The 2.1x slowdown was the cache write
+
+The bump first measured 2.1x slower: `psnd mhs` on one warm file went 1.99s ->
+4.25s, upstream `bin/mhs` 1.00s -> 2.14s. None of it is compilation.
+
+0.16.5.0 compresses `.mhscache` with LZMA; 0.15.0.0 used LZ77
+(`lib/System/IO/Serialize.hs:42`). Every `-C` run rewrites the whole cache, so
+every run pays a full LZMA encode of a file whose contents did not change. A
+`sample` of a warm run spends ~60% in the encoder: `Bt4_MatchFinder_Skip` 475,
+`Bt4_MatchFinder_GetMatches` 339, `LzmaEnc_CodeOneBlock` 171 out of 1680,
+against 577 in `evali`.
+
+Splitting the run by cache flag, same file, warm, package mode:
+
+| | 0.15.0.0 | 0.16.5.0 |
+|-|-|-|
+| `-C` (read and write) | 1.00s | 2.15s |
+| `-CR` (read only) | 0.29s | 0.30s |
+| cost of the write | 0.71s | 1.85s |
+
+Compilation is 0.29s against 0.30s: unchanged. Two larger compiles with no
+cache in play agree: psnd's five music modules plus a driver go to C in 1.44s
+under 0.15.0.0 and 1.42s under 0.16.5.0, and a three-line module in 0.50s under
+both. The counters agree too -- 0.16.5.0
+runs 122M reductions to 0.15.0.0's 238M, so it does less interpreted work, at
+51 Mred/s against 238 because the C encoder dominates the clock.
+
+psnd now passes `-CR` on a warm cache and `-C` only when cold, the same test
+that gates the `-p` flags. A warm `psnd mhs -r Smoke.hs` is 0.41s, against 4.25s
+before the change and 1.99s at 0.15.0.0; `mhs_smoke_tests` went 4.37s to 0.49s.
+The trade is that a warm run no longer persists a module it just compiled, so
+an unchanged file recompiles next run. That costs 0.3s on a small file and
+nothing on a changed one, against 1.85s of LZMA every run. The cache's value is
+the packages, and those are already in it.
+
+`WANT_OVERFLOW`, the other suspect, costs about 7% (2.38s -> 2.21s with it off),
+and `-O2` versus `-O3` costs nothing (2.16s versus 2.14s).
 
 ## Version facts
 
@@ -19,7 +66,8 @@ There is no MicroHs 0.17.0.
 
 | | Version | Date |
 |-|-|-|
-| Vendored in psnd | `0.15.0.0` | 2025-12-17 |
+| Vendored in psnd | `0.16.5.0` | 2026-06-20 |
+| Previously vendored | `0.15.0.0` | 2025-12-17 |
 | Latest release tag | `v0.16.5.0` | 2026-06-20 |
 | `master` | `0.16.6.0` | 2026-08-29 |
 
@@ -80,7 +128,7 @@ the sed-equivalent rename should apply unchanged.
 
 ## What breaks at 0.16.5.0
 
-### 1. `MHSDIR` disables package lookup
+### 1. `MHSDIR` disables package lookup -- did not bite
 
 This is the blocker. `src/MicroHs/Compile.hs:599` at 0.16.5.0:
 
@@ -106,10 +154,11 @@ psnd sets `MHSDIR=VFS_VIRTUAL_ROOT` in `repl.c:967`, `repl.c:1015`, `repl.c:1199
 embedded `packages/base-0.15.0.0.pkg`. Under 0.16.5.0 the `Nothing` in the third
 tuple slot means no package path at all. The default `PKG_ZSTD` mode stops working.
 
-Two fixes exist. Either make the VFS answer the "installed" layout that the `Nothing`
-branch probes (`<bin>/../mhs-VER/packages/...`, resolved from `getExecutablePath`, which
-inside psnd is the psnd binary), or move to `--embed-packages`. The second is better and
-is analysed below.
+**Correction.** This never fired. The `Nothing` only drops the *default* package path:
+`Main.hs:62` expands it and `-a` appends to `pkgPaths` independently, and psnd already
+passes `-a${VFS_VIRTUAL_ROOT}` at all three call sites. Package lookup resolves through
+the VFS exactly as at 0.15.0.0. The analysis above read `getPaths` without following
+`pkgPaths` into `Main.hs`.
 
 ### 2. `targets.conf` renamed to `mhs.conf`
 
@@ -118,8 +167,12 @@ in the upstream Makefile, and `Main.hs:205` reads `mhsdir </> "mhs.conf"`.
 `CMakeLists.txt:826` copies `targets.conf` and is the only reference in psnd.
 
 `readConfig` degrades gracefully: a missing file is a warning (suppressed under `-q`) and
-an empty config. `findSection` only errors when a target is actually needed, which is the
-C-generation path. Pure eval and REPL work without the file.
+an empty config. `findSection` errors when a target is actually needed, which is the
+C-generation path, so `psnd mhs -o exe` fails with `Cannot find config section: unix,
+available=`. At 0.15.0.0 `readTargets` returned `[]` and compilation proceeded on
+defaults. `mhs-embed` gained `--conf`, which embeds the file at the virtual root, and
+every embed rule passes it; extraction to the temp directory carries it along for the
+`-o` path.
 
 ### 3. Six new runtime files
 
@@ -256,21 +309,23 @@ Treat any claim of direct influence as unverified.
 
 ## Migration paths
 
-### Path A - minimal bump
+Path A was taken.
 
-Keep the VFS. Fix `MHSDIR` by teaching `vfs.c` to answer the installed-layout probe
-instead of the `MHSDIR` shortcut.
+### Path A - minimal bump (taken)
 
-1. Replace `source/thirdparty/MicroHs/` with the `v0.16.5.0` tree.
-2. Regenerate `impl/` from `src/runtime/`, including the six new files, applying the
-   `mmalloc` rename.
-3. Update the two version pins and the `targets.conf` -> `mhs.conf` copy.
-4. Stop setting `MHSDIR`; make the VFS serve `<bin>/../mhs-0.16.5.0/packages/...` keyed
-   off the psnd executable path.
-5. Rebuild `base.pkg` and `music.pkg`; verify PKG_ZSTD startup.
+Keep the VFS. What it came to:
 
-Estimate: half a day mechanical, one to three days on step 4 with no automated coverage
-to catch regressions.
+1. Replace `source/thirdparty/MicroHs/` with the `v0.16.5.0` tree, keeping the vendored
+   `cpphssrc/malcolm-wallace-universe/` contents, which upstream ships as an empty
+   submodule directory. Touch the tree afterwards.
+2. Delete `bin/`; upstream `make` rebuilds the three tools from `generated/*.c` with a C
+   compiler, and CMake already runs it when `bin/mhs` is absent. No GHC.
+3. Point the mcabal data-dir copy at `mhs.conf`, and embed `mhs.conf` in the VFS.
+4. Step 4 of the forecast was unnecessary; see the correction under item 1.
+
+Steps 2 and 3 of the forecast were already done by the preparatory work: `impl/` no
+longer exists and the version pin is parsed from `MicroHs.cabal`, so the six new runtime
+files and the version bump needed no edits at all.
 
 ### Path B - adopt `--embed-packages`
 
@@ -300,7 +355,7 @@ independent of embedding. But the package half of `vfs.c` and most of `mhs-embed
 Path B is the correct destination. It should not be attempted at the same time as the
 version bump.
 
-## Why defer
+## Why it was deferred (superseded)
 
 - **No payoff psnd needs.** 0.16.x delivers a larger base library, LZMA, imath, and
   overflow checking. 0.17.0 adds string interpolation and qualified strings. None of it
