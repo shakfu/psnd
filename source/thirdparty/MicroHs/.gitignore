@@ -17,7 +17,7 @@ a.out
 dist-newstyle/
 dist/
 .mhsi
-Interactive.hs
+# Interactive.hs: upstream ignores it but tracks it; psnd must vendor it
 .mhscache
 *.js
 *.wasm
