@@ -281,6 +281,23 @@ TEST(parse_gate_returns_end) {
     ASSERT_EQ(*end, ' ');
 }
 
+TEST(parse_gate_clamps_to_int16_max) {
+    int16_t rows;
+
+    ASSERT_TRUE(tracker_notes_parse_gate("~32767", &rows, NULL));
+    ASSERT_EQ(rows, 32767);
+
+    ASSERT_TRUE(tracker_notes_parse_gate("~32768", &rows, NULL));
+    ASSERT_EQ(rows, 32767);
+
+    ASSERT_TRUE(tracker_notes_parse_gate("~65536", &rows, NULL));
+    ASSERT_EQ(rows, 32767);
+
+    /* More digits than an int holds: saturates instead of wrapping. */
+    ASSERT_TRUE(tracker_notes_parse_gate("~99999999999999999999", &rows, NULL));
+    ASSERT_EQ(rows, 32767);
+}
+
 TEST(parse_gate_invalid) {
     int16_t rows;
 
@@ -773,6 +790,7 @@ BEGIN_TEST_SUITE("Notes Plugin")
     RUN_TEST(parse_gate_basic);
     RUN_TEST(parse_gate_zero);
     RUN_TEST(parse_gate_returns_end);
+    RUN_TEST(parse_gate_clamps_to_int16_max);
     RUN_TEST(parse_gate_invalid);
 
     /* Note to string */

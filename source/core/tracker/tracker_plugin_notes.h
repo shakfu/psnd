@@ -70,7 +70,7 @@ bool tracker_notes_parse_velocity(const char* str, uint8_t* out_vel, const char*
  * Handles "~N" format where N is rows.
  *
  * @param str         String starting with ~
- * @param out_rows    Output: gate in rows
+ * @param out_rows    Output: gate in rows, clamped to 0..INT16_MAX
  * @param out_end     Output: pointer after parsed gate
  * @return            true if valid gate, false otherwise
  */

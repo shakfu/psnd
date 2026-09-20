@@ -199,6 +199,14 @@ def package(
     if license_file.is_file():
         shutil.copy2(license_file, stage_dir / "LICENSE")
 
+    # Vendored dependencies carry their own terms, several of them LGPL or
+    # GPL, so the archive has to ship their notices too. Missing the directory
+    # is a packaging error, not a variant that happens to need no attribution.
+    licenses_dir = ROOT / "docs" / "licenses"
+    if not licenses_dir.is_dir():
+        raise SystemExit(f"third-party licenses missing: {licenses_dir}")
+    shutil.copytree(licenses_dir, stage_dir / "licenses")
+
     if strip_symbols and platform.system() != "Windows":
         strip = shutil.which("strip")
         if strip:

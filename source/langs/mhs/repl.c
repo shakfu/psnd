@@ -30,6 +30,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <sys/stat.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -812,11 +817,61 @@ static int needs_extraction(int argc, char **argv) {
 }
 #endif /* MHS_NO_COMPILATION */
 
+#ifdef MHS_USE_PKG
+#define MHS_CACHE_FILE ".mhscache"
+
+/* Path of the running psnd binary, which is where the packages are embedded. */
+static int mhs_exe_path(char *buf, size_t size) {
+#if defined(__APPLE__)
+    uint32_t n = (uint32_t)size;
+    return _NSGetExecutablePath(buf, &n) == 0 ? 0 : -1;
+#elif defined(__linux__)
+    ssize_t n = readlink("/proc/self/exe", buf, size - 1);
+    if (n <= 0) return -1;
+    buf[n] = '\0';
+    return 0;
+#else
+    (void)buf;
+    (void)size;
+    return -1;
+#endif
+}
+
+/* MicroHs appends the -p packages to .mhscache on every run without checking
+   whether the cache it just read already holds them, so preloading against a
+   warm cache costs ~2MB and a second of load time per run, without bound. The
+   packages survive in the cache, so only preload when there is nothing usable
+   to reuse. */
+static int mhs_need_preload(void) {
+    struct stat cache_st;
+    if (stat(MHS_CACHE_FILE, &cache_st) != 0) return 1;
+
+    /* A run killed mid-save leaves a zero-length cache. mhs then aborts on it
+       and never rewrites it, so drop it here. */
+    if (cache_st.st_size == 0) {
+        remove(MHS_CACHE_FILE);
+        return 1;
+    }
+
+    char exe[1024];
+    struct stat exe_st;
+    if (mhs_exe_path(exe, sizeof(exe)) != 0 || stat(exe, &exe_st) != 0) return 1;
+
+    /* A newer binary can carry different packages, and the cached copies are
+       never validated against it. Start over rather than mix the two. */
+    if (exe_st.st_mtime >= cache_st.st_mtime) {
+        remove(MHS_CACHE_FILE);
+        return 1;
+    }
+    return 0;
+}
+#endif /* MHS_USE_PKG */
+
 static char **build_mhs_argv(MhsReplArgs *args, int *out_argc, char *path_buf1,
                              char *path_buf2, size_t buf_size) {
     /* Calculate total args needed */
 #ifdef MHS_USE_PKG
-    int extra_args = 4;  /* -C, -a<path>, -pbase, -pmusic */
+    int extra_args = 4;  /* -C, -a<path>, and up to two -p flags */
 #else
     int extra_args = 3;  /* -C, -i<path>, -i<path>/lib */
 #endif
@@ -832,8 +887,10 @@ static char **build_mhs_argv(MhsReplArgs *args, int *out_argc, char *path_buf1,
 #ifdef MHS_USE_PKG
     snprintf(path_buf1, buf_size, "-a%s", VFS_VIRTUAL_ROOT);
     new_argv[j++] = path_buf1;
-    new_argv[j++] = "-pbase";
-    new_argv[j++] = "-pmusic";
+    if (mhs_need_preload()) {
+        new_argv[j++] = "-pbase";
+        new_argv[j++] = "-pmusic";
+    }
 #else
     snprintf(path_buf1, buf_size, "-i%s", VFS_VIRTUAL_ROOT);
     snprintf(path_buf2, buf_size, "-i%s/lib", VFS_VIRTUAL_ROOT);
@@ -1059,8 +1116,10 @@ int mhs_repl_main(int argc, char **argv) {
         snprintf(path_arg1, sizeof(path_arg1), "-a%s", VFS_VIRTUAL_ROOT);
     }
     new_argv[j++] = path_arg1;
-    new_argv[j++] = "-pbase";
-    new_argv[j++] = "-pmusic";
+    if (mhs_need_preload()) {
+        new_argv[j++] = "-pbase";
+        new_argv[j++] = "-pmusic";
+    }
 #else
     if (temp_dir) {
         snprintf(path_arg1, sizeof(path_arg1), "-i%s", temp_dir);
@@ -1222,8 +1281,10 @@ int mhs_play_main(int argc, char **argv) {
 #ifdef MHS_USE_PKG
     snprintf(path_arg1, sizeof(path_arg1), "-a%s", VFS_VIRTUAL_ROOT);
     new_argv[j++] = path_arg1;
-    new_argv[j++] = "-pbase";
-    new_argv[j++] = "-pmusic";
+    if (mhs_need_preload()) {
+        new_argv[j++] = "-pbase";
+        new_argv[j++] = "-pmusic";
+    }
 #else
     snprintf(path_arg1, sizeof(path_arg1), "-i%s", VFS_VIRTUAL_ROOT);
     snprintf(path_arg2, sizeof(path_arg2), "-i%s/lib", VFS_VIRTUAL_ROOT);

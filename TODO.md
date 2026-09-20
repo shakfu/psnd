@@ -32,11 +32,12 @@
   - This is a legal question, not a technical one — get a definitive answer
     before publishing binaries of those variants.
 
-- [ ] Add license texts for all vendored dependencies #licensing-third-party-attribution
-  - `docs/licenses/` currently contains only `KILO-LICENSE`; there are 23
-    dependencies under `source/thirdparty/`.
-  - Several are LGPL (Csound, FluidSynth, libsndfile, liblo) or GPL-2.0+
-    (Ableton Link), so attribution is an obligation, not a courtesy.
+- [ ] Add the two missing third-party license texts #licensing-third-party-attribution
+  - `docs/licenses/` now carries a text per vendored dependency and
+    `scripts/build_release.py` copies it into every archive.
+  - Still missing: zstd (amalgamated sources vendored without upstream's
+    `LICENSE`/`COPYING`) and JUCE (fetched at configure time by `minihost`,
+    AGPL-3.0 or commercial). See `docs/licenses/README.md`.
 
 - [ ] Add `THIRD-PARTY.md` recording each dependency's upstream URL and pinned version #licensing-third-party-attribution
   - 67 MB is vendored with no submodules, so there is currently no way to tell

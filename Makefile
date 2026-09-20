@@ -158,38 +158,43 @@ psnd: configure-tsf
 show-config: configure-tsf
 	@$(CMAKE) --build $(BUILD_DIR) --target show-config --config Release
 
+# Per-test ceiling shared with scripts/build_release.py. Tests carrying their
+# own TIMEOUT property keep it. Without this a test that blocks on stdin hangs
+# the run until the caller's own timeout, with no indication of which test.
+PSND_CTEST = $(CMAKE) -E chdir $(BUILD_DIR) ctest -C Release --output-on-failure --timeout 120
+
 # Generic test - builds current configuration and runs tests
 test:
 	@$(CMAKE) --build $(BUILD_DIR) --config Release
-	@$(CMAKE) -E chdir $(BUILD_DIR) ctest -C Release --output-on-failure
+	@$(PSND_CTEST)
 
 # Configuration-specific test targets
 test-tsf: psnd-tsf
-	@$(CMAKE) -E chdir $(BUILD_DIR) ctest -C Release --output-on-failure
+	@$(PSND_CTEST)
 
 test-csound: psnd-tsf-csound
-	@$(CMAKE) -E chdir $(BUILD_DIR) ctest -C Release --output-on-failure
+	@$(PSND_CTEST)
 
 test-fluid: psnd-fluid
-	@$(CMAKE) -E chdir $(BUILD_DIR) ctest -C Release --output-on-failure
+	@$(PSND_CTEST)
 
 test-fluid-csound: psnd-fluid-csound
-	@$(CMAKE) -E chdir $(BUILD_DIR) ctest -C Release --output-on-failure
+	@$(PSND_CTEST)
 
 test-web: psnd-tsf-web
-	@$(CMAKE) -E chdir $(BUILD_DIR) ctest -C Release --output-on-failure
+	@$(PSND_CTEST)
 
 test-fluid-web: psnd-fluid-web
-	@$(CMAKE) -E chdir $(BUILD_DIR) ctest -C Release --output-on-failure
+	@$(PSND_CTEST)
 
 test-full: psnd-fluid-csound-web
-	@$(CMAKE) -E chdir $(BUILD_DIR) ctest -C Release --output-on-failure
+	@$(PSND_CTEST)
 
 test-minihost: psnd-minihost
-	@$(CMAKE) -E chdir $(BUILD_DIR) ctest -C Release --output-on-failure
+	@$(PSND_CTEST)
 
 test-minihost-csound: psnd-minihost-csound
-	@$(CMAKE) -E chdir $(BUILD_DIR) ctest -C Release --output-on-failure
+	@$(PSND_CTEST)
 
 clean:
 	@$(CMAKE) --build $(BUILD_DIR) --target clean 2>/dev/null || true

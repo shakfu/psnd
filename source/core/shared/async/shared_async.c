@@ -11,6 +11,7 @@
 #include "link/link.h"
 #include <uv.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <stdio.h>
 #include <signal.h>
@@ -500,12 +501,22 @@ void shared_async_schedule_free(SharedAsyncSchedule* sched) {
     }
 }
 
-static void schedule_grow(SharedAsyncSchedule* sched) {
-    if (sched->count >= sched->capacity) {
-        size_t new_cap = sched->capacity == 0 ? 64 : sched->capacity * 2;
-        sched->events = realloc(sched->events, new_cap * sizeof(SharedAsyncEvent));
-        sched->capacity = new_cap;
-    }
+/* Returns 1 when the schedule has room for one more event, 0 on failure.
+   On failure the existing schedule is left intact and the caller drops the
+   event rather than writing past the end of the buffer. */
+static int schedule_grow(SharedAsyncSchedule* sched) {
+    if (sched->count < sched->capacity) return 1;
+
+    size_t new_cap = sched->capacity == 0 ? 64 : sched->capacity * 2;
+    if (new_cap > SIZE_MAX / sizeof(SharedAsyncEvent)) return 0;
+
+    SharedAsyncEvent* grown = realloc(sched->events,
+                                      new_cap * sizeof(SharedAsyncEvent));
+    if (!grown) return 0;
+
+    sched->events = grown;
+    sched->capacity = new_cap;
+    return 1;
 }
 
 static void schedule_update_duration(SharedAsyncSchedule* sched, int end_time) {
@@ -518,7 +529,7 @@ void shared_async_schedule_note(SharedAsyncSchedule* sched, int time_ms,
                                  int channel, int pitch, int velocity,
                                  int duration_ms) {
     if (!sched) return;
-    schedule_grow(sched);
+    if (!schedule_grow(sched)) return;
 
     SharedAsyncEvent* evt = &sched->events[sched->count++];
     evt->time_ms = time_ms;
@@ -539,7 +550,7 @@ void shared_async_schedule_note(SharedAsyncSchedule* sched, int time_ms,
 void shared_async_schedule_note_on(SharedAsyncSchedule* sched, int time_ms,
                                     int channel, int pitch, int velocity) {
     if (!sched) return;
-    schedule_grow(sched);
+    if (!schedule_grow(sched)) return;
 
     SharedAsyncEvent* evt = &sched->events[sched->count++];
     evt->time_ms = time_ms;
@@ -560,7 +571,7 @@ void shared_async_schedule_note_on(SharedAsyncSchedule* sched, int time_ms,
 void shared_async_schedule_note_off(SharedAsyncSchedule* sched, int time_ms,
                                      int channel, int pitch) {
     if (!sched) return;
-    schedule_grow(sched);
+    if (!schedule_grow(sched)) return;
 
     SharedAsyncEvent* evt = &sched->events[sched->count++];
     evt->time_ms = time_ms;
@@ -581,7 +592,7 @@ void shared_async_schedule_note_off(SharedAsyncSchedule* sched, int time_ms,
 void shared_async_schedule_cc(SharedAsyncSchedule* sched, int time_ms,
                                int channel, int cc, int value) {
     if (!sched) return;
-    schedule_grow(sched);
+    if (!schedule_grow(sched)) return;
 
     SharedAsyncEvent* evt = &sched->events[sched->count++];
     evt->time_ms = time_ms;
@@ -602,7 +613,7 @@ void shared_async_schedule_cc(SharedAsyncSchedule* sched, int time_ms,
 void shared_async_schedule_program(SharedAsyncSchedule* sched, int time_ms,
                                     int channel, int program) {
     if (!sched) return;
-    schedule_grow(sched);
+    if (!schedule_grow(sched)) return;
 
     SharedAsyncEvent* evt = &sched->events[sched->count++];
     evt->time_ms = time_ms;
@@ -644,7 +655,7 @@ void shared_async_schedule_set_launch_quantize(SharedAsyncSchedule* sched, int q
 void shared_async_schedule_note_on_tick(SharedAsyncSchedule* sched, int tick,
                                          int channel, int pitch, int velocity) {
     if (!sched) return;
-    schedule_grow(sched);
+    if (!schedule_grow(sched)) return;
 
     SharedAsyncEvent* evt = &sched->events[sched->count++];
     evt->tick = tick;
@@ -663,7 +674,7 @@ void shared_async_schedule_note_on_tick(SharedAsyncSchedule* sched, int tick,
 void shared_async_schedule_note_off_tick(SharedAsyncSchedule* sched, int tick,
                                           int channel, int pitch) {
     if (!sched) return;
-    schedule_grow(sched);
+    if (!schedule_grow(sched)) return;
 
     SharedAsyncEvent* evt = &sched->events[sched->count++];
     evt->tick = tick;
@@ -682,7 +693,7 @@ void shared_async_schedule_note_off_tick(SharedAsyncSchedule* sched, int tick,
 void shared_async_schedule_cc_tick(SharedAsyncSchedule* sched, int tick,
                                     int channel, int cc, int value) {
     if (!sched) return;
-    schedule_grow(sched);
+    if (!schedule_grow(sched)) return;
 
     SharedAsyncEvent* evt = &sched->events[sched->count++];
     evt->tick = tick;
@@ -701,7 +712,7 @@ void shared_async_schedule_cc_tick(SharedAsyncSchedule* sched, int tick,
 void shared_async_schedule_program_tick(SharedAsyncSchedule* sched, int tick,
                                          int channel, int program) {
     if (!sched) return;
-    schedule_grow(sched);
+    if (!schedule_grow(sched)) return;
 
     SharedAsyncEvent* evt = &sched->events[sched->count++];
     evt->tick = tick;
@@ -719,7 +730,7 @@ void shared_async_schedule_program_tick(SharedAsyncSchedule* sched, int tick,
 
 void shared_async_schedule_tempo(SharedAsyncSchedule* sched, int tick, int tempo) {
     if (!sched) return;
-    schedule_grow(sched);
+    if (!schedule_grow(sched)) return;
 
     SharedAsyncEvent* evt = &sched->events[sched->count++];
     evt->tick = tick;
@@ -1052,7 +1063,7 @@ void shared_async_schedule_note_ex(SharedAsyncSchedule* sched, int time_ms,
                                     int channel, int pitch, int velocity,
                                     int duration_ms, int source_line) {
     if (!sched) return;
-    schedule_grow(sched);
+    if (!schedule_grow(sched)) return;
 
     SharedAsyncEvent* evt = &sched->events[sched->count++];
     evt->time_ms = time_ms;
@@ -1072,7 +1083,7 @@ void shared_async_schedule_note_on_tick_ex(SharedAsyncSchedule* sched, int tick,
                                             int channel, int pitch, int velocity,
                                             int source_line) {
     if (!sched) return;
-    schedule_grow(sched);
+    if (!schedule_grow(sched)) return;
 
     SharedAsyncEvent* evt = &sched->events[sched->count++];
     evt->tick = tick;
@@ -1090,7 +1101,7 @@ void shared_async_schedule_note_off_tick_ex(SharedAsyncSchedule* sched, int tick
                                              int channel, int pitch,
                                              int source_line) {
     if (!sched) return;
-    schedule_grow(sched);
+    if (!schedule_grow(sched)) return;
 
     SharedAsyncEvent* evt = &sched->events[sched->count++];
     evt->tick = tick;

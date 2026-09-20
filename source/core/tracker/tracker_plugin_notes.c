@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <limits.h>
 #include <stdio.h>
 
 #ifdef _MSC_VER
@@ -68,9 +69,12 @@ static bool parse_int(const char* str, int* out_val, const char** out_end) {
 
     if (!isdigit((unsigned char)*p)) return false;
 
+    /* Saturate rather than overflow: digits are user-authored and a wrapped
+       int is undefined behaviour, not a large duration. */
     int val = 0;
     while (isdigit((unsigned char)*p)) {
-        val = val * 10 + (*p - '0');
+        int digit = *p - '0';
+        val = val > (INT_MAX - digit) / 10 ? INT_MAX : val * 10 + digit;
         p++;
     }
 
@@ -167,8 +171,9 @@ bool tracker_notes_parse_gate(const char* str, int16_t* out_rows, const char** o
     int rows;
     if (!parse_int(p, &rows, &p)) return false;
 
-    /* Minimum gate of 0 (instant), no maximum */
+    /* Clamp to the output type: 0 is instant, INT16_MAX the longest gate */
     if (rows < 0) rows = 0;
+    if (rows > INT16_MAX) rows = INT16_MAX;
 
     if (out_rows) *out_rows = (int16_t)rows;
     if (out_end) *out_end = p;

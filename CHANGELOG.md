@@ -20,6 +20,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **Schedule Growth Ignored `realloc` Failure**: `schedule_grow()` assigned the result of `realloc()` straight to `sched->events` and raised `capacity` whether or not the allocation succeeded, so a failed grow lost the existing buffer and the caller then wrote an event through a null pointer. It now grows through a temporary, rejects a capacity whose byte size would overflow `size_t`, and reports failure; all thirteen scheduling entry points drop the event instead of writing past the buffer (`shared_async.c`)
+
+- **Tracker Gate Wrapped Instead Of Clamping**: `tracker_notes_parse_gate()` cast an unbounded `int` to its `int16_t` output, so `~65536` became a gate of 0 and other values became negative durations. Gates now clamp to `INT16_MAX`, matching the clamp velocity already applies at 127. `parse_int()` saturates as well, having been undefined behaviour on any expression carrying more digits than an `int` holds (`tracker_plugin_notes.c`)
+
+- **MHS Package Preload Grew `.mhscache` Without Bound**: psnd passed `-pbase -pmusic` on every `mhs` invocation. MicroHs appends preloaded packages to the cache it just read without checking whether they are already there, so each run added ~2.3MB and about a second of load time: 3s at run 1, 25s by run 12, and eventually a `mhs_smoke_tests` timeout whose kill left a zero-length cache that every later run aborted on. The packages survive in the cache, so psnd now preloads only when the cache is missing, empty, or older than the psnd binary, and deletes the cache in the latter two cases rather than mixing package copies. Upstream MicroHs 0.16.6.0 has the same unconditional `addPackage`, so this is not fixed by a version bump (`repl.c`)
+
+- **`make test` Had No Per-Test Timeout**: a test blocking on stdin ran until the caller's own timeout with no indication of which test hung. The ten `ctest` targets now share one `PSND_CTEST` variable carrying `--timeout 120`, the ceiling `scripts/build_release.py` already used (`Makefile`)
+
+### Added
+
+- **Third-Party License Texts In Release Archives**: `docs/licenses/` holds the license text of each vendored dependency, and `build_release.py` copies it into every archive, failing if the directory is absent. Archives carried only psnd's own `LICENSE` while the binaries link LGPL (Csound, FluidSynth, libsndfile, liblo) and GPL-2.0 (Ableton Link) code. zstd and JUCE ship no text in-tree and the mongoose GPL-2.0-only conflict still blocks the web variants; `docs/licenses/README.md` records both gaps (`build_release.py`)
+
 ## [0.2.2]
 
 ### Security
