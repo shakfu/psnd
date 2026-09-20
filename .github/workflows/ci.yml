@@ -8,6 +8,16 @@ on:
   workflow_dispatch:
 
 jobs:
+  vendored:
+    name: vendored sources
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      # A vendored .gitignore can drop a file the build needs from every
+      # clone, which only a fresh checkout such as this one ever notices.
+      - run: python3 scripts/check_vendored.py
+
   build:
     name: build + test (${{ matrix.target }})
     runs-on: ${{ matrix.os }}

@@ -14,8 +14,21 @@ on:
         required: true
 
 jobs:
+  preflight:
+    name: vendored sources
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      # Gates the 21 build legs: a file dropped from the checkout by a
+      # vendored .gitignore fails them all, ~40 minutes in, on a spent tag.
+      - run: python3 scripts/check_vendored.py
+
   build:
     name: build (${{ matrix.target }}, ${{ matrix.variant }})
+    needs: preflight
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:

@@ -22,6 +22,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Vendored MicroHs Source Missing From Every Clone**: MicroHs's own `.gitignore` carries an unanchored `Interactive.hs` rule, and a vendored tree's `.gitignore` applies inside psnd. Upstream tracks `src/MicroHs/Interactive.hs` anyway, so the local tree kept building while no clone had the file, and the patched-compiler step failed on CI with "No file to patch" -- once on `main`, once on the 0.3.0 tag. The rule is commented out in the vendored copy rather than negated in the root `.gitignore`, which a nested one overrides. `scripts/check_vendored.py` now rejects a patch target that is untracked, and any file under `source/thirdparty` that is ignored but present outside an allowlist; it runs from `make check-vendored`, as its own ci job, and as a gate on the 21 release build legs (`source/thirdparty/MicroHs/.gitignore`, `scripts/check_vendored.py`, `Makefile`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`)
+
 ## [0.3.0]
 
 ### Fixed

@@ -8,7 +8,7 @@
 		psnd-tsf-web web psnd-fluid-web psnd-fluid-csound-web full \
 		psnd-minihost minihost psnd-minihost-csound \
 		mhs-small mhs-src mhs-src-small no-mhs \
-		test-tsf test-csound test-fluid test-fluid-csound \
+		test-tsf test-csound test-fluid test-fluid-csound check-vendored \
 		test-web test-fluid-web test-full test-minihost test-minihost-csound
 
 BUILD_DIR ?= build
@@ -195,6 +195,11 @@ test-minihost: psnd-minihost
 
 test-minihost-csound: psnd-minihost-csound
 	@$(PSND_CTEST)
+
+# Vendored trees carry their upstream .gitignore, which can drop a required
+# file from every clone while the local build keeps working.
+check-vendored:
+	@python3 scripts/check_vendored.py
 
 clean:
 	@$(CMAKE) --build $(BUILD_DIR) --target clean 2>/dev/null || true
