@@ -24,6 +24,11 @@ jobs:
           - tsf-web
           - fluid-web
           - fluid-csound-web
+          - tsf-native
+        exclude:
+          # webview's Edge backend needs the WebView2 SDK, which is not vendored
+          - os: windows-latest
+            variant: tsf-native
         include:
           # --- variant -> cmake flags mapping ---
           - variant: tsf
@@ -40,6 +45,8 @@ jobs:
             cmake_args: "-DBUILD_FLUID_BACKEND=ON -DBUILD_WEB_HOST=ON"
           - variant: fluid-csound-web
             cmake_args: "-DBUILD_FLUID_BACKEND=ON -DBUILD_CSOUND_BACKEND=ON -DBUILD_WEB_HOST=ON"
+          - variant: tsf-native
+            cmake_args: "-DBUILD_WEBVIEW_HOST=ON"
           # --- os -> platform label mapping ---
           - os: ubuntu-latest
             platform: linux
@@ -86,6 +93,10 @@ jobs:
         run: |
           ver="${{ steps.version-unix.outputs.version }}${{ steps.version-win.outputs.version }}"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Install webview dependencies (Linux)
+        if: runner.os == 'Linux' && endsWith(matrix.variant, '-native')
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
 
       - name: Configure CMake (Unix)
         if: runner.os != 'Windows'

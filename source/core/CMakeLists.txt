@@ -211,6 +211,12 @@ function(psnd_build_loki)
         ${PSND_ALL_LANG_INCLUDES}
     )
 
+    # Both web hosts embed the vendored xterm.js
+    if(BUILD_WEB_HOST OR BUILD_WEBVIEW_HOST)
+        include(psnd_xterm)
+        psnd_generate_xterm_header()
+    endif()
+
     # Web host configuration (mongoose-based HTTP/WebSocket server)
     if(BUILD_WEB_HOST)
         target_compile_definitions(libloki PUBLIC LOKI_WEB_HOST)
@@ -235,7 +241,7 @@ function(psnd_build_loki)
             # Linux requires GTK and WebKitGTK
             find_package(PkgConfig REQUIRED)
             pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
-            pkg_check_modules(WEBKIT2GTK REQUIRED webkit2gtk-4.0)
+            pkg_check_modules(WEBKIT2GTK REQUIRED webkit2gtk-4.1)
             target_include_directories(libloki PRIVATE
                 ${GTK3_INCLUDE_DIRS}
                 ${WEBKIT2GTK_INCLUDE_DIRS}

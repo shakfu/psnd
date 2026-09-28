@@ -174,6 +174,19 @@ static void free_row_view(EditorRowView *rv) {
 
 /* ======================= Session Lifecycle ================================= */
 
+/* Apply -sf / -cs to the file's language. Only reports; a failed backend
+ * leaves the language on its default output. */
+static void session_configure_backend(editor_ctx_t *ctx, const EditorConfig *config) {
+    const char *path = config->csound_path ? config->csound_path : config->soundfont_path;
+    if (!path) return;
+    if (loki_lang_configure_backend(ctx, config->soundfont_path, config->csound_path) != 0) {
+        const char *err = loki_lang_get_error(ctx);
+        editor_set_status_msg(ctx, "Failed to load %s: %s", path, err ? err : "unknown error");
+    } else {
+        editor_set_status_msg(ctx, "Using %s", path);
+    }
+}
+
 EditorSession *editor_session_new(const EditorConfig *config) {
     EditorSession *session = calloc(1, sizeof(EditorSession));
     if (!session) return NULL;
@@ -241,6 +254,11 @@ EditorSession *editor_session_new(const EditorConfig *config) {
             }
         }
 
+        /* Load VST3/AU plugin before the language, as the terminal editor does */
+        if (config->plugin_path) {
+            editor_load_plugin(&session->ctx, config->plugin_path, config->plugin_log);
+        }
+
         /* Initialize Lua if requested */
         if (config->enable_lua) {
             LuaHost *lua_host = lua_host_create();
@@ -263,7 +281,9 @@ EditorSession *editor_session_new(const EditorConfig *config) {
                     lua_host_init_repl(lua_host);
 
                     /* Initialize language for file type, or default language if no file */
-                    if (loki_lang_init_for_file(&session->ctx) != 0) {
+                    if (loki_lang_init_for_file(&session->ctx) == 0) {
+                        session_configure_backend(&session->ctx, config);
+                    } else {
                         /* No file or unrecognized extension - try to init first available language */
                         int lang_count = 0;
                         const LokiLangOps **langs = loki_lang_all(&lang_count);

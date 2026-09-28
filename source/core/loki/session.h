@@ -62,6 +62,12 @@ typedef struct {
     int undo_limit;         /* Max undo operations (default: 1000, 0 to disable) */
     size_t undo_memory;     /* Max undo memory bytes (default: 10MB) */
 
+    /* Audio backend for the file's language (NULL for the default) */
+    const char *soundfont_path; /* TinySoundFont soundfont (-sf) */
+    const char *csound_path;    /* Csound CSD file (-cs) */
+    const char *plugin_path;    /* VST3/AU plugin (--plugin) */
+    const char *plugin_log;     /* Plugin debug log (--plugin-log, NULL to suppress) */
+
     /* OSC (Open Sound Control) configuration */
     int osc_enabled;        /* Enable OSC server (default: 0) */
     int osc_port;           /* OSC server port (default: 7770, 0 for default) */

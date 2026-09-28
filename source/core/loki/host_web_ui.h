@@ -12,16 +12,11 @@
 #ifndef LOKI_HOST_WEB_UI_H
 #define LOKI_HOST_WEB_UI_H
 
-/* xterm.js paths - local when embedded, CDN otherwise */
-#ifdef LOKI_EMBED_XTERM
+/* xterm.js paths, served by host_web.c from host_web_xterm.h. host_webview.cpp
+ * inlines the same files in place of these tags. */
 #define XTERM_CSS_PATH "/xterm.css"
 #define XTERM_JS_PATH "/xterm.js"
 #define XTERM_FIT_JS_PATH "/xterm-fit.js"
-#else
-#define XTERM_CSS_PATH "https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css"
-#define XTERM_JS_PATH "https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"
-#define XTERM_FIT_JS_PATH "https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"
-#endif
 
 /* Complete embedded xterm.js-based UI - no external files needed */
 static const char *EMBEDDED_HTML =

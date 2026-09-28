@@ -314,6 +314,37 @@ static void print_usage(void) {
     printf("  Ctrl-L    Lua console\n");
 }
 
+/* Load a VST3/AU plugin into slot 0 and route playback through it. Reports
+ * the outcome in the status bar; returns 0 on success. Shared by the terminal
+ * editor and EditorSession (--web, --native). */
+int editor_load_plugin(editor_ctx_t *ctx, const char *path, const char *log_path) {
+#ifdef BUILD_MINIHOST_BACKEND
+    if (!ctx->model.shared) return -1;
+    /* Set log file before loading (NULL = suppress to /dev/null) */
+    shared_minihost_set_log_file(log_path);
+    if (shared_minihost_init() != 0) {
+        editor_set_status_msg(ctx, "Failed to initialize plugin host");
+        return -1;
+    }
+    if (shared_minihost_load(0, path) != 0) {
+        editor_set_status_msg(ctx, "Failed to load plugin: %s", path);
+        return -1;
+    }
+    if (shared_minihost_enable() != 0) {
+        editor_set_status_msg(ctx, "Failed to enable plugin audio");
+        return -1;
+    }
+    ctx->model.shared->minihost_enabled = 1;
+    const char *name = shared_minihost_get_plugin_name(0);
+    editor_set_status_msg(ctx, "Plugin loaded: %s", name ? name : path);
+    return 0;
+#else
+    (void)log_path;
+    editor_set_status_msg(ctx, "Plugin support not built: %s", path);
+    return -1;
+#endif
+}
+
 int loki_editor_main(int argc, char **argv) {
     /* Static editor context - ensures all fields are zero-initialized.
      * This is critical because init_editor() doesn't initialize all fields
@@ -541,33 +572,9 @@ int loki_editor_main(int argc, char **argv) {
 #endif
 
             /* Load VST3/AU plugin if requested via CLI */
-#ifdef BUILD_MINIHOST_BACKEND
-            if (plugin_path && ctx->model.shared) {
-                /* Set log file before loading (NULL = suppress to /dev/null) */
-                shared_minihost_set_log_file(plugin_log);
-                int init_rc = shared_minihost_init();
-                if (init_rc == 0) {
-                    int load_rc = shared_minihost_load(0, plugin_path);
-                    if (load_rc == 0) {
-                        const char *plugin_name = shared_minihost_get_plugin_name(0);
-                        int enable_rc = shared_minihost_enable();
-                        if (enable_rc == 0) {
-                            ctx->model.shared->minihost_enabled = 1;
-                            editor_set_status_msg(ctx, "Plugin loaded: %s",
-                                plugin_name ? plugin_name : plugin_path);
-                        } else {
-                            editor_set_status_msg(ctx, "Failed to enable plugin audio");
-                        }
-                    } else {
-                        editor_set_status_msg(ctx, "Failed to load plugin: %s", plugin_path);
-                    }
-                } else {
-                    editor_set_status_msg(ctx, "Failed to initialize plugin host");
-                }
+            if (plugin_path) {
+                editor_load_plugin(ctx, plugin_path, plugin_log);
             }
-#else
-            (void)plugin_path;  /* Suppress unused variable warning */
-#endif
 
             int ret = loki_lang_init_for_file(ctx);
             if (ret == 0) {

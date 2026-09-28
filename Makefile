@@ -1,15 +1,15 @@
 .DEFAULT_GOAL := all
 .PHONY: all build clean reset test show-config rebuild remake docs library psnd \
 		configure-tsf configure-tsf-csound configure-fluid configure-fluid-csound \
-		configure-tsf-web configure-fluid-web configure-fluid-csound-web \
+		configure-tsf-web configure-fluid-web configure-fluid-csound-web configure-tsf-native \
 		configure-minihost configure-minihost-csound \
 		configure-mhs-small configure-mhs-src configure-mhs-src-small configure-no-mhs \
 		psnd-tsf default psnd-tsf-csound csound psnd-fluid psnd-fluid-csound \
-		psnd-tsf-web web psnd-fluid-web psnd-fluid-csound-web full \
+		psnd-tsf-web web psnd-fluid-web psnd-fluid-csound-web full psnd-tsf-native native \
 		psnd-minihost minihost psnd-minihost-csound \
 		mhs-small mhs-src mhs-src-small no-mhs \
 		test-tsf test-csound test-fluid test-fluid-csound check-vendored \
-		test-web test-fluid-web test-full test-minihost test-minihost-csound
+		test-web test-fluid-web test-full test-native test-minihost test-minihost-csound
 
 BUILD_DIR ?= build
 CMAKE ?= cmake
@@ -24,7 +24,7 @@ all: build
 # whatever the previous variant set. Every variant therefore states the full
 # option set explicitly, and switching variants in place is safe.
 PSND_ALL_OPTS = -DBUILD_CSOUND_BACKEND=OFF -DBUILD_FLUID_BACKEND=OFF \
-                -DBUILD_WEB_HOST=OFF -DBUILD_MINIHOST_BACKEND=OFF
+                -DBUILD_WEB_HOST=OFF -DBUILD_WEBVIEW_HOST=OFF -DBUILD_MINIHOST_BACKEND=OFF
 PSND_CONFIGURE = $(CMAKE) -S . -B $(BUILD_DIR) -DBUILD_TESTING=ON $(PSND_ALL_OPTS)
 
 configure-tsf:
@@ -47,6 +47,10 @@ configure-fluid-web:
 
 configure-fluid-csound-web:
 	@mkdir -p $(BUILD_DIR) && $(PSND_CONFIGURE) -DBUILD_FLUID_BACKEND=ON -DBUILD_CSOUND_BACKEND=ON -DBUILD_WEB_HOST=ON
+
+# Native webview window (experimental; Linux needs libwebkit2gtk-4.1-dev)
+configure-tsf-native:
+	@mkdir -p $(BUILD_DIR) && $(PSND_CONFIGURE) -DBUILD_WEBVIEW_HOST=ON
 
 # Minihost (VST/AU plugin) variants
 # Note: JUCE is fetched automatically during configure (first build takes longer)
@@ -109,6 +113,12 @@ psnd-fluid-csound-web: configure-fluid-csound-web
 	@$(CMAKE) --build $(BUILD_DIR) --config Release
 
 full: psnd-fluid-csound-web  # alias
+
+# TinySoundFont + native webview (experimental)
+psnd-tsf-native: configure-tsf-native
+	@$(CMAKE) --build $(BUILD_DIR) --config Release
+
+native: psnd-tsf-native  # alias
 
 # ============================================================================
 # Minihost (VST/AU plugin) build variants
@@ -188,6 +198,9 @@ test-fluid-web: psnd-fluid-web
 	@$(PSND_CTEST)
 
 test-full: psnd-fluid-csound-web
+	@$(PSND_CTEST)
+
+test-native: psnd-tsf-native
 	@$(PSND_CTEST)
 
 test-minihost: psnd-minihost

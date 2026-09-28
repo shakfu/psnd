@@ -13,10 +13,8 @@
  *   {"cmd": "load", "filename": "..."}
  *   {"cmd": "save", "filename": "...", "content": "..."}
  *
- * To embed xterm.js (no CDN dependency), include host_web_xterm.h before this file:
- *   #include "host_web_xterm.h"
- *   #include "host_web.c"
- * Or define LOKI_EMBED_XTERM and ensure host_web_xterm.h is in the include path.
+ * xterm.js is served from host_web_xterm.h, generated at configure time from
+ * source/thirdparty/xterm-* by scripts/cmake/psnd_xterm.cmake.
  */
 
 #ifdef LOKI_WEB_HOST
@@ -45,10 +43,7 @@
 #include <sys/wait.h>
 #endif
 
-/* Optional embedded xterm - include host_web_xterm.h to enable */
-#if defined(LOKI_EMBED_XTERM) && !defined(XTERM_CSS)
 #include "host_web_xterm.h"
-#endif
 
 /* Shared embedded HTML UI (also used by host_webview.cpp) */
 #include "host_web_ui.h"
@@ -816,7 +811,6 @@ static void web_host_handler(struct mg_connection *c, int ev, void *ev_data) {
             return;
         }
 
-#ifdef LOKI_EMBED_XTERM
         /* Serve embedded xterm.js files */
         if (mg_match(hm->uri, mg_str("/xterm.css"), NULL)) {
             mg_http_reply(c, 200, "Content-Type: text/css\r\nCache-Control: max-age=86400\r\n",
@@ -833,7 +827,6 @@ static void web_host_handler(struct mg_connection *c, int ev, void *ev_data) {
                          "%s", XTERM_FIT_JS);
             return;
         }
-#endif
 
         /* Serve static files from web_root. Token-gated: web_root is an
          * arbitrary user-chosen directory. */

@@ -34,6 +34,7 @@ option(BUILD_FLUID_BACKEND "Build with FluidSynth synthesis backend" OFF)
 option(BUILD_MINIHOST_BACKEND "Build with minihost VST/AU plugin support (fetches JUCE)" OFF)
 option(BUILD_TESTING "Build tests (default on)" ON)
 option(BUILD_WEB_HOST "Build web server host with mongoose" OFF)
+option(BUILD_WEBVIEW_HOST "Build native webview host (--native, experimental)" OFF)
 # Lua sandbox is ON by default: the editor auto-loads .psnd/init.lua and
 # project Lua, so an unsandboxed interpreter would make opening any file/repo
 # arbitrary code execution. Set -DLUA_SANDBOX=OFF to restore full os/io/debug.

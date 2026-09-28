@@ -22,7 +22,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Added
+
+- **Experimental Native Webview Build**: `make native` builds the `--native` host (`-DBUILD_WEBVIEW_HOST=ON`), now a declared CMake option. Linux requires `libwebkit2gtk-4.1-dev`; the build previously asked for `webkit2gtk-4.0`, which current distributions no longer ship. The nightly build matrix builds and tests it on Linux and macOS; Windows is excluded until the WebView2 SDK is available to the build.
+
+### Changed
+
+- **xterm.js Vendored And Always Embedded**: xterm.js 5.3.0 and xterm-addon-fit 0.8.0 are vendored unmodified from npm under `source/thirdparty/`, and `scripts/cmake/psnd_xterm.cmake` generates `host_web_xterm.h` from them at configure time. Nothing defined `LOKI_EMBED_XTERM`, so both web hosts loaded xterm from jsDelivr, and the checked-in header did not match any upstream file. The header holds byte arrays, not string literals, because MSVC rejects literals over 64KB (C1091).
+
 ### Fixed
+
+- **`--web` And `--native` Ignored `-sf`, `-cs`, `--plugin` And OSC Options**: both hosts copied only display options into `EditorConfig`, so they ran without the requested backend, plugin or OSC server. `--plugin` in a build without minihost now reports that in the status bar instead of being silently ignored. They were also recognized only as the first argument, so `psnd -sf gm.sf2 --native song.alda` failed with `Unknown option: --native`.
+
+- **A Failed Plugin Load Silenced stderr For The Whole Session**: `shared_minihost_load` redirects stderr to hide plugin debug output, and restored it only in `shared_minihost_cleanup`, which nothing calls. On a failed load its own error message went to `/dev/null`, as did everything after it. The failure path now restores stderr.
+
+- **`--native` Used A Full Core While Idle**: the event tick re-queued itself through `webview_dispatch`, which on GTK is a high-priority idle source, so the main loop never slept. Events are now handled in the JS binding callback, which already runs on the UI thread.
 
 - **Vendored MicroHs Source Missing From Every Clone**: MicroHs's own `.gitignore` carries an unanchored `Interactive.hs` rule, and a vendored tree's `.gitignore` applies inside psnd. Upstream tracks `src/MicroHs/Interactive.hs` anyway, so the local tree kept building while no clone had the file, and the patched-compiler step failed on CI with "No file to patch" -- once on `main`, once on the 0.3.0 tag. The rule is commented out in the vendored copy rather than negated in the root `.gitignore`, which a nested one overrides. `scripts/check_vendored.py` now rejects a patch target that is untracked, and any file under `source/thirdparty` that is ignored but present outside an allowlist; it runs from `make check-vendored`, as its own ci job, and as a gate on the 21 release build legs (`source/thirdparty/MicroHs/.gitignore`, `scripts/check_vendored.py`, `Makefile`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`)
 

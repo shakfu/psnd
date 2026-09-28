@@ -306,6 +306,9 @@ void editor_ctx_set_renderer(editor_ctx_t *ctx, Renderer *renderer);
 /* Status message */
 void editor_set_status_msg(editor_ctx_t *ctx, const char *fmt, ...);
 
+/* VST3/AU plugin (--plugin); reports in the status bar, returns 0 on success */
+int editor_load_plugin(editor_ctx_t *ctx, const char *path, const char *log_path);
+
 /* Character insertion (context-aware) */
 void editor_insert_char(editor_ctx_t *ctx, int c);
 void editor_insert_newline(editor_ctx_t *ctx);

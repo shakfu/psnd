@@ -343,6 +343,8 @@ int shared_minihost_load(int slot, const char* path) {
 
     if (!plugin) {
         mh_mutex_unlock(&g_mh.process_mutex);
+        /* No plugin to silence; without this the error below goes to /dev/null */
+        restore_stderr();
         fprintf(stderr, "Minihost: Failed to load plugin: %s\n",
                 err_buf[0] ? err_buf : path);
         return -1;

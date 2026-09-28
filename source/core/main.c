@@ -120,6 +120,15 @@ static void print_unified_help(const char *prog) {
     printf("\n");
 }
 
+#if defined(LOKI_WEB_HOST) || defined(LOKI_WEBVIEW_HOST)
+static int has_flag(int argc, char **argv, const char *flag) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], flag) == 0) return 1;
+    }
+    return 0;
+}
+#endif
+
 int main(int argc, char **argv) {
     /* Initialize language dispatch system */
     lang_dispatch_init();
@@ -186,71 +195,59 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* Handle --web flag for web server mode */
+    /* --web / --native may follow editor options, e.g. `-sf gm.sf2 --native f` */
+#if defined(LOKI_WEB_HOST) || defined(LOKI_WEBVIEW_HOST)
+    int want_web = has_flag(argc, argv, "--web");
+    int want_native = has_flag(argc, argv, "--native");
+    if (want_web || want_native) {
+        EditorCliArgs args = {0};
+        if (editor_cli_parse(argc, argv, &args) != 0) {
+            return 1;
+        }
+        if (args.show_help) {
+            editor_cli_print_usage();
+            return 0;
+        }
+        if (args.show_version) {
+            editor_cli_print_version();
+            return 0;
+        }
+
+        EditorConfig config = {
+            .rows = args.rows > 0 ? args.rows : 24,
+            .cols = args.cols > 0 ? args.cols : 80,
+            .filename = args.filename,
+            .line_numbers = args.line_numbers,
+            .word_wrap = args.word_wrap,
+            .enable_lua = 1,
+            .soundfont_path = args.soundfont_path,
+            .csound_path = args.csound_path,
+            .plugin_path = args.plugin_path,
+            .plugin_log = args.plugin_log,
+            .osc_enabled = args.osc_enabled,
+            .osc_port = args.osc_port,
+            .osc_send_host = args.osc_send_host,
+            .osc_send_port = args.osc_send_port
+        };
+
 #ifdef LOKI_WEB_HOST
-    if (strcmp(first_arg, "--web") == 0) {
-        EditorCliArgs args = {0};
-        if (editor_cli_parse(argc, argv, &args) != 0) {
-            return 1;
+        if (want_web) {
+            int port = args.web_port > 0 ? args.web_port : 8080;
+            return editor_host_web_run(args.web_host, port, args.web_root,
+                                       args.web_open, &config);
         }
-        if (args.show_help) {
-            editor_cli_print_usage();
-            return 0;
-        }
-        if (args.show_version) {
-            editor_cli_print_version();
-            return 0;
-        }
-
-        EditorConfig config = {
-            .rows = args.rows > 0 ? args.rows : 24,
-            .cols = args.cols > 0 ? args.cols : 80,
-            .filename = args.filename,
-            .line_numbers = args.line_numbers,
-            .word_wrap = args.word_wrap,
-            .enable_lua = 1
-        };
-
-        int port = args.web_port > 0 ? args.web_port : 8080;
-        return editor_host_web_run(args.web_host, port, args.web_root,
-                                   args.web_open, &config);
-    }
 #endif
-
-    /* Handle --native flag for native webview mode */
 #ifdef LOKI_WEBVIEW_HOST
-    if (strcmp(first_arg, "--native") == 0) {
-        EditorCliArgs args = {0};
-        if (editor_cli_parse(argc, argv, &args) != 0) {
-            return 1;
+        if (want_native) {
+            char title[256];
+            if (args.filename) {
+                snprintf(title, sizeof(title), PSND_NAME " - %s", args.filename);
+            } else {
+                snprintf(title, sizeof(title), PSND_NAME);
+            }
+            return editor_host_webview_run(title, 1024, 768, &config);
         }
-        if (args.show_help) {
-            editor_cli_print_usage();
-            return 0;
-        }
-        if (args.show_version) {
-            editor_cli_print_version();
-            return 0;
-        }
-
-        EditorConfig config = {
-            .rows = args.rows > 0 ? args.rows : 24,
-            .cols = args.cols > 0 ? args.cols : 80,
-            .filename = args.filename,
-            .line_numbers = args.line_numbers,
-            .word_wrap = args.word_wrap,
-            .enable_lua = 1
-        };
-
-        /* Build window title */
-        char title[256];
-        if (args.filename) {
-            snprintf(title, sizeof(title), PSND_NAME " - %s", args.filename);
-        } else {
-            snprintf(title, sizeof(title), PSND_NAME);
-        }
-
-        return editor_host_webview_run(title, 1024, 768, &config);
+#endif
     }
 #endif
 

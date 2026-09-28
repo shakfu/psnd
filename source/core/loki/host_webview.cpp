@@ -4,10 +4,9 @@
  * Uses the same xterm.js-based UI as host_web.c but without requiring a browser.
  *
  * Event flow:
- *   User Input -> JS event handler -> psnd.send() binding
- *     -> Queue event in C++ -> webview_host_read_event() returns
- *     -> editor_session_handle_event() -> state update
- *     -> webview_host_render() -> webview_eval("psndHandleMessage(viewmodel)")
+ *   User Input -> JS event handler -> window.psnd() binding (UI thread)
+ *     -> queue event -> webview_host_pump() -> editor_session_handle_event()
+ *     -> webview_eval("psndHandleMessage(viewmodel)")
  */
 
 #ifdef LOKI_WEBVIEW_HOST
@@ -25,6 +24,7 @@ extern "C" {
 #include "jsonrpc.h"
 #include "lang_bridge.h"
 #include "host_web_ui.h"
+#include "host_web_xterm.h"
 }
 
 #include <cstdio>
@@ -104,6 +104,8 @@ static int webview_host_dequeue_event(WebviewHostData *data, EditorEvent *event)
 }
 
 /* ======================= JS Binding Callback =============================== */
+
+static void webview_host_pump(WebviewHostData *data);
 
 // Called from JavaScript: window.psnd(json_string)
 static void webview_host_js_callback(const char *id, const char *req, void *arg) {
@@ -191,6 +193,7 @@ static void webview_host_js_callback(const char *id, const char *req, void *arg)
     json_value_free(&msg);
     json_value_free(&args);
     webview_return(data->webview, id, 0, "");
+    webview_host_pump(data);
 }
 
 /* ======================= Send ViewModel to JS ============================== */
@@ -273,52 +276,50 @@ static void webview_host_destroy(EditorHost *host) {
     free(host);
 }
 
-/* ======================= Custom Event Loop ================================= */
+/* ======================= Event Pump ======================================== */
 
-// Dispatch function for webview_dispatch
-struct DispatchData {
-    EditorHost *host;
-    EditorSession *session;
-};
-
-static void webview_tick_callback(webview_t w, void *arg) {
-    DispatchData *dd = static_cast<DispatchData*>(arg);
-    if (!dd || !dd->host || !dd->session) return;
-
-    EditorHost *host = dd->host;
-    EditorSession *session = dd->session;
-    WebviewHostData *data = static_cast<WebviewHostData*>(host->data);
-
-    // Early exit if shutting down
-    if (!data || data->shutting_down.load() || !data->running.load()) return;
-
-    // Process one event if available
+// Bindings run on the UI thread, so events are handled there as they arrive.
+// A self-rescheduling webview_dispatch tick would spin the GTK idle loop.
+static void webview_host_pump(WebviewHostData *data) {
     EditorEvent event;
-    if (webview_host_dequeue_event(data, &event) == 0) {
-        // Check again before processing
-        if (data->shutting_down.load()) return;
-
-        int result = editor_session_handle_event(session, &event);
+    while (data->session && webview_host_dequeue_event(data, &event) == 0) {
         data->needs_render = 1;
-
-        // Check for quit (handle_event returns 1 when quit is requested)
-        if (result == 1) {
+        // handle_event returns 1 when quit is requested
+        if (editor_session_handle_event(data->session, &event) == 1) {
             data->running.store(false);
-            webview_terminate(w);
-            return; // Don't schedule another tick
+            webview_terminate(data->webview);
+            return;
         }
     }
-
-    // Render if needed (check shutdown again)
-    if (!data->shutting_down.load() && data->needs_render) {
+    if (data->needs_render) {
         webview_host_send_snapshot(data);
         data->needs_render = 0;
     }
+}
 
-    // Schedule next tick if still running and not shutting down
-    if (!data->shutting_down.load() && data->running.load()) {
-        webview_dispatch(w, webview_tick_callback, arg);
-    }
+/* ======================= Embedded HTML ===================================== */
+
+// set_html pages have no origin to fetch "/xterm.js" from, so inline the
+// files in place of the tags host_web_ui.h emits for the web host.
+static bool webview_host_inline(std::string &html, const std::string &tag,
+                                const std::string &body) {
+    size_t pos = html.find(tag);
+    if (pos == std::string::npos) return false;
+    html.replace(pos, tag.size(), body);
+    return true;
+}
+
+static bool webview_host_build_html(std::string &html) {
+    html = EMBEDDED_HTML;
+    return webview_host_inline(html,
+               "<link rel=\"stylesheet\" href=\"" XTERM_CSS_PATH "\">",
+               std::string("<style>") + XTERM_CSS + "</style>")
+        && webview_host_inline(html,
+               "<script src=\"" XTERM_JS_PATH "\"></script>",
+               std::string("<script>") + XTERM_JS + "</script>")
+        && webview_host_inline(html,
+               "<script src=\"" XTERM_FIT_JS_PATH "\"></script>",
+               std::string("<script>") + XTERM_FIT_JS + "</script>");
 }
 
 /* ======================= Public API ======================================== */
@@ -355,7 +356,15 @@ EditorHost *editor_host_webview_create(const char *title, int width, int height)
     webview_bind(data->webview, "psnd", webview_host_js_callback, data);
 
     // Load the embedded HTML UI
-    webview_set_html(data->webview, EMBEDDED_HTML);
+    std::string html;
+    if (!webview_host_build_html(html)) {
+        fprintf(stderr, "Error: embedded HTML is missing an xterm tag\n");
+        webview_destroy(data->webview);
+        delete data;
+        free(host);
+        return nullptr;
+    }
+    webview_set_html(data->webview, html.c_str());
 
     // Set up host interface
     host->read_event = webview_host_read_event;
@@ -392,14 +401,6 @@ int editor_host_webview_run(const char *title, int width, int height,
     // Request initial render
     data->needs_render = 1;
 
-    // Set up dispatch data for the tick callback (must persist during event loop)
-    DispatchData *dd = new DispatchData();
-    dd->host = host;
-    dd->session = session;
-
-    // Schedule initial tick
-    webview_dispatch(data->webview, webview_tick_callback, dd);
-
     // Run the webview event loop (blocks until window closed)
     webview_run(data->webview);
 
@@ -410,12 +411,6 @@ int editor_host_webview_run(const char *title, int width, int height,
     // Null out session pointer first (callbacks check this)
     EditorSession *sess_to_free = data->session;
     data->session = nullptr;
-
-    // Clean up dispatch data (invalidate the pointers)
-    dd->host = nullptr;
-    dd->session = nullptr;
-    delete dd;
-    dd = nullptr;
 
     // Now safe to free session
     if (sess_to_free) {
