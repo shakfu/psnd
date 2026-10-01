@@ -464,7 +464,7 @@ static tr7_C_return_t scm_tsf_load(tr7_engine_t tsc, int nvalues, const tr7_t *v
     }
 
     const char *path = tr7_string_buffer(values[0]);
-    int result = shared_tsf_load_soundfont(path);
+    int result = shared_tsf_init() != 0 ? -1 : shared_tsf_load_soundfont(path);
 
     if (result == 0) {
         printf("TR7: Loaded SoundFont: %s\n", path);

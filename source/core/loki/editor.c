@@ -48,6 +48,7 @@
 #include "command/command_impl.h"
 #include "shared/context.h"
 #include "shared/osc/osc.h"
+#include "soundfont.h"
 #ifdef SHARED_SOURCE_TRACKING
 #include "async/shared_async.h"
 #endif
@@ -442,6 +443,7 @@ int loki_editor_main(int argc, char **argv) {
             exit(1);
         }
     }
+    soundfont_path = psnd_soundfont_resolve(soundfont_path, csound_path || plugin_path);
 
     /* Suppress unused variable warnings when OSC is not compiled in */
     (void)osc_enabled;

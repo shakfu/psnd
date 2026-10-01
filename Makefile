@@ -25,7 +25,11 @@ all: build
 # option set explicitly, and switching variants in place is safe.
 PSND_ALL_OPTS = -DBUILD_CSOUND_BACKEND=OFF -DBUILD_FLUID_BACKEND=OFF \
                 -DBUILD_WEB_HOST=OFF -DBUILD_WEBVIEW_HOST=OFF -DBUILD_MINIHOST_BACKEND=OFF
-PSND_CONFIGURE = $(CMAKE) -S . -B $(BUILD_DIR) -DBUILD_TESTING=ON $(PSND_ALL_OPTS)
+# Extra options for any variant, e.g. `make psnd-fluid-csound
+# EXTRA_CMAKE_ARGS=-DBUILD_WEBVIEW_HOST=ON`. Options outside PSND_ALL_OPTS
+# stay in the CMake cache after the variable is dropped.
+EXTRA_CMAKE_ARGS ?=
+PSND_CONFIGURE = $(CMAKE) -S . -B $(BUILD_DIR) -DBUILD_TESTING=ON $(PSND_ALL_OPTS) $(EXTRA_CMAKE_ARGS)
 
 configure-tsf:
 	@mkdir -p $(BUILD_DIR) && $(PSND_CONFIGURE)

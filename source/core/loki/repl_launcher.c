@@ -9,6 +9,7 @@
 #include "psnd.h"
 #include "loki/core.h"
 #include "syntax.h"
+#include "soundfont.h"
 #include "loki/lua.h"
 
 #include <lua.h>
@@ -56,6 +57,9 @@ static void parse_repl_args(ParsedArgs *parsed, int argc, char **argv) {
             parsed->input_file = argv[i];
         }
     }
+    parsed->args.soundfont_path = psnd_soundfont_resolve(parsed->args.soundfont_path,
+        parsed->args.port_index >= 0 || parsed->args.virtual_name || parsed->list_ports ||
+        parsed->show_help);
 }
 
 static void parse_play_args(ParsedArgs *parsed, int argc, char **argv) {
@@ -73,6 +77,7 @@ static void parse_play_args(ParsedArgs *parsed, int argc, char **argv) {
             parsed->input_file = argv[i];
         }
     }
+    parsed->args.soundfont_path = psnd_soundfont_resolve(parsed->args.soundfont_path, 0);
 }
 
 /* ============================================================================

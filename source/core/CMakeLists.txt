@@ -168,6 +168,7 @@ function(psnd_build_loki)
         ${PSND_CORE_DIR}/loki/json.c
         ${PSND_CORE_DIR}/loki/jsonrpc.c
         ${PSND_CORE_DIR}/loki/async_queue.c
+        ${PSND_CORE_DIR}/loki/soundfont.c
     )
 
     # Web host sources (mongoose-based HTTP/WebSocket server)

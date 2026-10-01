@@ -46,6 +46,15 @@ void shared_midi_list_ports(struct SharedContext* ctx);
 int shared_midi_get_port_count(struct SharedContext* ctx);
 
 /**
+ * @brief Count output ports that could reach a synth.
+ *
+ * Skips system ports that make no sound: ALSA's "Midi Through" loopback and
+ * PipeWire's "input" sequencer clients. Needs no SharedContext.
+ * @return Number of such ports, or 0 if enumeration fails.
+ */
+int shared_midi_count_synth_outputs(void);
+
+/**
  * @brief Get the name of a MIDI output port.
  * @param ctx Shared context.
  * @param port_idx Port index.

@@ -518,7 +518,7 @@ enabled = false          # Opt-in Lua scripting (disabled by default)
 
 [audio]
 backend = "tsf"          # "tsf", "fluid", "csound", or "midi"
-soundfont = ""           # Path to SoundFont (empty = default GM)
+soundfont = ""           # Default SoundFont when -sf is absent (~/ allowed)
 
 [link]
 enabled = false          # Ableton Link sync
@@ -535,6 +535,16 @@ tempo = 120              # Default tempo
 "ctrl-t" = "new_buffer"
 "ctrl-c" = "copy"
 ```
+
+### Default SoundFont
+
+Without `-sf`, psnd picks a SoundFont in this order:
+
+1. `PSND_SOUNDFONT` environment variable (`none` turns off 2 and 3)
+2. `[audio] soundfont` in `config.toml`
+3. The first General MIDI SoundFont found in `.psnd/soundfonts/`, `~/.psnd/soundfonts/`, `~/.aldakit/soundfonts/`, `~/.local/share/soundfonts/`, `~/.local/share/sounds/sf2/`, then the system directories (`/usr/share/sounds/sf2/` and `/usr/share/soundfonts/` on Linux, `/Library/Audio/Sounds/Banks/` on macOS)
+
+A SoundFont found by search (3) is used only when no MIDI output can reach a synth. ALSA's "Midi Through" and PipeWire's own ports do not count. `-p`, `--virtual`, `-cs` and `--plugin` always take precedence.
 
 ### Lua Scripting (Opt-in)
 

@@ -100,6 +100,52 @@ void shared_midi_init_observer(SharedContext* ctx) {
     }
 }
 
+/* Output ports every Linux desktop exposes with no synth behind them. The
+ * libremidi C API gives only the port name, so PipeWire's two sequencer
+ * clients are matched by their bare port name. */
+static int is_system_output(const char* name, size_t len) {
+    static const char through[] = "Midi Through";
+    if (len >= sizeof(through) - 1 && strncmp(name, through, sizeof(through) - 1) == 0) {
+        return 1;
+    }
+    return len == 5 && strncmp(name, "input", 5) == 0;
+}
+
+static void on_output_port_counted(void* user_ctx, const libremidi_midi_out_port* port) {
+    int* count = (int*)user_ctx;
+    const char* name = NULL;
+    size_t len = 0;
+    if (libremidi_midi_out_port_name(port, &name, &len) == 0 && name &&
+        is_system_output(name, len)) {
+        return;
+    }
+    (*count)++;
+}
+
+int shared_midi_count_synth_outputs(void) {
+    libremidi_observer_configuration observer_conf;
+    libremidi_api_configuration api_conf;
+    libremidi_midi_observer_handle* observer = NULL;
+    int count = 0;
+
+    if (libremidi_midi_observer_configuration_init(&observer_conf) != 0 ||
+        libremidi_midi_api_configuration_init(&api_conf) != 0) {
+        return 0;
+    }
+    observer_conf.track_hardware = true;
+    observer_conf.track_virtual = true;
+    observer_conf.track_any = true;
+    api_conf.configuration_type = Observer;
+    api_conf.api = UNSPECIFIED;
+
+    if (libremidi_midi_observer_new(&observer_conf, &api_conf, &observer) != 0) {
+        return 0;
+    }
+    libremidi_midi_observer_enumerate_output_ports(observer, &count, on_output_port_counted);
+    libremidi_midi_observer_free(observer);
+    return count;
+}
+
 void shared_midi_cleanup(SharedContext* ctx) {
     if (!ctx) return;
 

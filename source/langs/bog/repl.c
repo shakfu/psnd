@@ -15,6 +15,7 @@
 #include "loki/core.h"
 #include "loki/internal.h"
 #include "loki/syntax.h"
+#include "loki/soundfont.h"
 #include "loki/lua.h"
 #include "loki/repl_launcher.h"
 #include "loki/repl_helpers.h"
@@ -944,7 +945,7 @@ static void *bog_cb_init(const SharedReplArgs *args) {
     /* Setup output */
     if (args->soundfont_path) {
         /* Use built-in synth */
-        if (shared_tsf_load_soundfont(args->soundfont_path) != 0) {
+        if (shared_tsf_init() != 0 || shared_tsf_load_soundfont(args->soundfont_path) != 0) {
             fprintf(stderr, "Error: Failed to load soundfont: %s\n", args->soundfont_path);
             shared_context_cleanup(g_bog_repl_shared);
             free(g_bog_repl_shared);
@@ -1247,6 +1248,8 @@ int bog_repl_main(int argc, char **argv) {
             input_file = arg;
         }
     }
+    args.soundfont_path = psnd_soundfont_resolve(args.soundfont_path,
+        args.port_index >= 0 || args.virtual_name);
 
     /* Initialize bog */
     void *lang_ctx = bog_cb_init(&args);

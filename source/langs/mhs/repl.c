@@ -57,6 +57,7 @@
 #include "loki/core.h"
 #include "loki/internal.h"
 #include "loki/syntax.h"
+#include "loki/soundfont.h"
 #include "loki/repl_helpers.h"
 #include "shared/repl_commands.h"
 
@@ -130,6 +131,8 @@ static void parse_mhs_args(MhsReplArgs *args, int argc, char **argv) {
         }
     }
     args->mhs_argv[args->mhs_argc] = NULL;
+    args->soundfont_path = psnd_soundfont_resolve(args->soundfont_path,
+        args->port_index >= 0 || args->virtual_name || args->list_ports || args->show_help);
 }
 
 static void free_mhs_args(MhsReplArgs *args) {
@@ -1353,6 +1356,7 @@ int mhs_play_main(int argc, char **argv) {
         fprintf(stderr, "Usage: psnd play [-v] [-sf soundfont.sf2] <file.hs>\n");
         return 1;
     }
+    args.soundfont_path = psnd_soundfont_resolve(args.soundfont_path, args.virtual_name != NULL);
 
     /* Initialize VFS */
     if (vfs_init() != 0) {

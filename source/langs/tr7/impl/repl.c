@@ -405,7 +405,7 @@ static tr7_C_return_t repl_scm_tsf_load(tr7_engine_t tsc, int nvalues, const tr7
     }
 
     const char *path = tr7_string_buffer(values[0]);
-    int result = shared_tsf_load_soundfont(path);
+    int result = shared_tsf_init() != 0 ? -1 : shared_tsf_load_soundfont(path);
 
     if (result == 0) {
         printf("TR7: Loaded SoundFont: %s\n", path);
@@ -824,7 +824,7 @@ static void *tr7_cb_init(const SharedReplArgs *args) {
     /* Setup output */
     if (args->soundfont_path) {
         /* Use built-in synth */
-        if (shared_tsf_load_soundfont(args->soundfont_path) != 0) {
+        if (shared_tsf_init() != 0 || shared_tsf_load_soundfont(args->soundfont_path) != 0) {
             fprintf(stderr, "Error: Failed to load soundfont: %s\n", args->soundfont_path);
             shared_context_cleanup(g_tr7_repl_shared);
             free(g_tr7_repl_shared);

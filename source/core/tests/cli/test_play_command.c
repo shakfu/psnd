@@ -37,6 +37,8 @@ SUITE_SETUP(play_tests) {
         fprintf(stderr, "Failed to create temp directory\n");
         exit(1);
     }
+    /* Keep play on MIDI: a discovered soundfont would sound through speakers */
+    test_setenv("PSND_SOUNDFONT", "none");
 }
 
 SUITE_TEARDOWN(play_tests) {

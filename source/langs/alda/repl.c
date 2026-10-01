@@ -9,6 +9,7 @@
 #include "loki/internal.h"
 #include "loki/syntax.h"
 #include "loki/lua.h"
+#include "loki/soundfont.h"
 #include "loki/repl_helpers.h"
 #include "shared/repl_commands.h"
 
@@ -311,6 +312,7 @@ int alda_play_main(int argc, char **argv) {
         fprintf(stderr, "Usage: " PSND_NAME " play [-v] [-sf soundfont.sf2] <file.alda|file.joy|file.csd>\n");
         return 1;
     }
+    soundfont_path = psnd_soundfont_resolve(soundfont_path, is_csd_file(input_file));
 
     /* Handle .csd files with Csound backend */
     if (is_csd_file(input_file)) {
@@ -509,6 +511,8 @@ int alda_repl_main(int argc, char **argv) {
         }
     }
 #endif
+    soundfont_path = psnd_soundfont_resolve(soundfont_path,
+        port_index >= 0 || port_name || virtual_name || list_ports);
 
     /* Initialize context */
     AldaContext ctx;

@@ -26,6 +26,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 - **Experimental Native Webview Build**: `make native` builds the `--native` host (`-DBUILD_WEBVIEW_HOST=ON`), now a declared CMake option. Linux requires `libwebkit2gtk-4.1-dev`; the build previously asked for `webkit2gtk-4.0`, which current distributions no longer ship. The nightly build matrix builds and tests it on Linux and macOS; Windows is excluded until the WebView2 SDK is available to the build.
 
+- **Default SoundFont Discovery**: without `-sf`, every mode (REPL, `play`, editor, `--web`, `--native`) uses `PSND_SOUNDFONT`, then `[audio] soundfont` from `config.toml`, then the first General MIDI SoundFont found in `.psnd/soundfonts/`, `~/.psnd/soundfonts/`, `~/.aldakit/soundfonts/` and the usual user and system directories. A discovered SoundFont replaces MIDI only when no output port can reach a synth, so a connected synth keeps priority; `PSND_SOUNDFONT=none` turns discovery off. ALSA's "Midi Through" and PipeWire's sequencer ports are not counted as synths: every Linux desktop has them, and psnd's default port 0 was usually "Midi Through", which plays nothing.
+
+- **`EXTRA_CMAKE_ARGS` Makefile Variable**: appends CMake options to any variant, e.g. `make psnd-fluid-csound EXTRA_CMAKE_ARGS=-DBUILD_WEBVIEW_HOST=ON`, so host and backend combinations need no dedicated targets.
+
 ### Changed
 
 - **xterm.js Vendored And Always Embedded**: xterm.js 5.3.0 and xterm-addon-fit 0.8.0 are vendored unmodified from npm under `source/thirdparty/`, and `scripts/cmake/psnd_xterm.cmake` generates `host_web_xterm.h` from them at configure time. Nothing defined `LOKI_EMBED_XTERM`, so both web hosts loaded xterm from jsDelivr, and the checked-in header did not match any upstream file. The header holds byte arrays, not string literals, because MSVC rejects literals over 64KB (C1091).
@@ -33,6 +37,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 ### Fixed
 
 - **`--web` And `--native` Ignored `-sf`, `-cs`, `--plugin` And OSC Options**: both hosts copied only display options into `EditorConfig`, so they ran without the requested backend, plugin or OSC server. `--plugin` in a build without minihost now reports that in the status bar instead of being silently ignored. They were also recognized only as the first argument, so `psnd -sf gm.sf2 --native song.alda` failed with `Unknown option: --native`.
+
+- **`-sf` Failed In The tr7 And Bog REPLs And `play`**: both loaded the SoundFont without initializing TinySoundFont first, so any `-sf` failed with `TSF: Backend not initialized`. tr7's `tsf-load` primitive had the same fault.
 
 - **A Failed Plugin Load Silenced stderr For The Whole Session**: `shared_minihost_load` redirects stderr to hide plugin debug output, and restored it only in `shared_minihost_cleanup`, which nothing calls. On a failed load its own error message went to `/dev/null`, as did everything after it. The failure path now restores stderr.
 

@@ -18,6 +18,7 @@
 #include "loki/cli.h"
 #include "loki/host.h"
 #include "loki/session.h"
+#include "loki/soundfont.h"
 #include "psnd.h"
 #include <stdio.h>
 #include <string.h>
@@ -220,7 +221,8 @@ int main(int argc, char **argv) {
             .line_numbers = args.line_numbers,
             .word_wrap = args.word_wrap,
             .enable_lua = 1,
-            .soundfont_path = args.soundfont_path,
+            .soundfont_path = psnd_soundfont_resolve(args.soundfont_path,
+                                                     args.csound_path || args.plugin_path),
             .csound_path = args.csound_path,
             .plugin_path = args.plugin_path,
             .plugin_log = args.plugin_log,

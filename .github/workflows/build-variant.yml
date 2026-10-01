@@ -16,6 +16,7 @@ on:
           - tsf-web
           - fluid-web
           - fluid-csound-web
+          - tsf-native
 
 jobs:
   # Build for Linux and macOS
@@ -56,6 +57,10 @@ jobs:
         if: matrix.os == 'macos-latest' && contains(inputs.variant, 'fluid')
         run: brew install fluid-synth
 
+      - name: Install webview dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest' && endsWith(inputs.variant, '-native')
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
       - name: Configure CMake
         run: |
           CMAKE_OPTS="-DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}"
@@ -82,6 +87,9 @@ jobs:
             fluid-csound-web)
               CMAKE_OPTS="$CMAKE_OPTS -DBUILD_FLUID_BACKEND=ON -DBUILD_CSOUND_BACKEND=ON -DBUILD_WEB_HOST=ON"
               ;;
+            tsf-native)
+              CMAKE_OPTS="$CMAKE_OPTS -DBUILD_WEBVIEW_HOST=ON"
+              ;;
           esac
 
           cmake -S . -B ${{ env.BUILD_DIR }} $CMAKE_OPTS
@@ -106,6 +114,8 @@ jobs:
   #       dirent.h and posix_compat.h are bundled in source/thirdparty/dirent/
   build-windows:
     name: Build ${{ inputs.variant }} (Windows MSVC)
+    # webview's Edge backend needs the WebView2 SDK, which is not vendored
+    if: ${{ !endsWith(inputs.variant, '-native') }}
     runs-on: windows-latest
     timeout-minutes: 45
     env:

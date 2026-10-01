@@ -42,6 +42,15 @@
 #define TEST_PROC_PATH_SEP '/'
 #endif
 
+/* Set an environment variable inherited by processes started with test_exec */
+static inline void test_setenv(const char *name, const char *value) {
+#ifdef _WIN32
+    _putenv_s(name, value);
+#else
+    setenv(name, value, 1);
+#endif
+}
+
 /* Maximum path length for temp directories */
 #define TEST_PROC_MAX_PATH 512
 
