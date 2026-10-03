@@ -234,6 +234,10 @@ if(BUILD_FLUID_BACKEND)
     # This avoids the glib dependency for a leaner build
     set(osal "cpp11" CACHE STRING "" FORCE)
 
+    # FindGCEM looks under ${CMAKE_SOURCE_DIR}/gcem (the psnd root), misses the
+    # vendored copy, and downloads it from GitHub at configure time.
+    set(GCEM_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/fluidsynth/gcem/include" CACHE PATH "" FORCE)
+
     add_subdirectory(fluidsynth)
 
     # Export FluidSynth include directories for the main project
