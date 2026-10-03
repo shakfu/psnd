@@ -1,0 +1,22 @@
+Free the decompressed buffer when closing an LZMA read stream
+
+closeb_lzma frees p->bf only in write mode. In read mode, bf holds the
+whole decompressed input, allocated by add_lzma_decompressor, so every
+read-side close leaks it. The runtime closes the combinator stream right
+after parsing it, and each .mhscache read goes through the same path, so
+a process that loads code repeatedly leaks one buffer per load (10-20MB
+for a program that pulls in base).
+
+--- a/src/runtime/bfile.c
++++ b/src/runtime/bfile.c
+@@ -1895,8 +1895,9 @@
+   if (!p->read) {
+     /* Write mode: compress whatever is buffered. */
+     flushb_lzma(bp);
+-    bfbuffer_free(&p->bf);
+   }
++  /* Both modes own bf: read mode holds the decompressed input */
++  bfbuffer_free(&p->bf);
+   closeb(p->bfile);
+   FREE(p);
+ }

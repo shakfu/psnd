@@ -1,5 +1,0 @@
-# LeakSanitizer suppressions for vendored code, used by `make test-asan`.
-# Each entry is allocated once and held until exit.
-
-# MicroHs: decompressed bundle buffer, never freed (src/runtime/bfile.c)
-leak:add_lzma_decompressor

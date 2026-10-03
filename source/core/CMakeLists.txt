@@ -356,7 +356,7 @@ function(psnd_build_binary)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
     )
 
-    # ASan reports and LSan suppressions need symbol names
+    # ASan stack traces need symbol names
     if(NOT MSVC AND NOT PSND_ENABLE_ASAN)
         add_custom_command(TARGET psnd_bin POST_BUILD
             COMMAND strip $<TARGET_FILE:psnd_bin>

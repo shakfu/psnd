@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Added
 
-- **`make test-asan`**: runs the `test-tsf` suite with `PSND_ENABLE_ASAN` in `build-asan/`, so the cached option stays out of `make test`. `scripts/lsan.supp` suppresses the exit-time MicroHs decompression buffer. ASan builds skip stripping `psnd`, which LSan suppressions and readable stack traces need. All 83 tests pass under it.
+- **`make test-asan`**: runs the `test-tsf` suite with `PSND_ENABLE_ASAN` in `build-asan/`, so the cached option stays out of `make test`. ASan builds skip stripping `psnd`, so ASan stack traces show function names. All 83 tests pass under it.
 
 ### Fixed
 
@@ -38,6 +38,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
   - Editor: each new buffer ran `undo_init` twice and leaked the first state. `editor_ctx_free` now frees tree-sitter state, and the alda, bog and mhs REPLs free their syntax context.
   - Joy: a runtime error leaked the parsed line, because the `longjmp` skipped its free.
   - Bog: a parse error that led to a second error leaked the first message. The parser now reports the first error, which names the real cause.
+  - MicroHs: closing an LZMA read stream leaked its decompressed buffer, 10-20MB per load of code or `.mhscache`. Fixed by `patches/runtime/0001-free-lzma-read-buffer.diff`. Runtime patches are applied to a configure-time copy of `src/runtime/`, so the vendored tree stays unmodified, matching the compiler patches.
   - TR7: engine teardown left the recent-allocation list as a GC root, so ports set through the C API were never finalized. Patched in the vendored `tr7.c`, marked `psnd:`.
 
 - **Typing into a tracker cell wrote past the edit buffer**: entering edit mode allocated the cell text's length plus one, but recorded 256 bytes more as capacity. The insert path therefore never grew the buffer, and the first keystroke wrote past it.

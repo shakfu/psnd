@@ -9,6 +9,12 @@ the generated C. It is cached: the step reruns only when a patch, `bin/mhs`, or
 `mhs-patch-xffi.py` changes. `-DMHS_PATCH_MHS=OFF` skips it and links upstream's
 committed `generated/mhs.c` instead.
 
+`runtime/` holds patches to the C runtime, `src/runtime/`. CMake copies the
+runtime into the build tree at configure time and applies them there, so the
+`psnd` binary and the runtime that `mhs -o` links against both get them. They
+cost nothing at build time and need no compiler rebuild. They keep
+upstream-relative paths and are applied with `-p3`.
+
 Patches are applied with `patch -p1 -s -N -t -F0`. No fuzz, so a patch whose
 context has drifted fails the build rather than landing in the wrong place; no
 reversal, so an already-applied patch is refused rather than undone.
@@ -42,6 +48,15 @@ Bool)`, so that route is closed until instance resolution improves.
 
 Sent upstream; drop this file when it lands.
 
+### `runtime/0001-free-lzma-read-buffer.diff`
+
+`closeb_lzma` frees its buffer only in write mode. In read mode the buffer is
+the whole decompressed input, so every load of LZMA-compressed combinators or
+`.mhscache` leaked 10-20MB. `make test-asan` found it in `mhs_smoke_tests` and
+`mhs_reload_tests`.
+
+To be sent upstream; drop this file when it lands.
+
 ## Not applied
 
 Three other patches were written against 0.16.5.0 and are in the repository
@@ -64,6 +79,7 @@ Re-check each applied patch against the new tree before bumping:
 ```sh
 cd source/thirdparty/MicroHs
 patch -p1 --dry-run < ../../langs/mhs/patches/0001-interactive-run-and-print.diff
+patch -p1 --dry-run < ../../langs/mhs/patches/runtime/0001-free-lzma-read-buffer.diff
 ```
 
 A patch that no longer applies has either been taken upstream, in which case

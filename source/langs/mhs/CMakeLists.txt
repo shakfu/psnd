@@ -82,18 +82,46 @@ set(EXAMPLES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/examples)
 # Applying them means rebuilding the compiler from the vendored sources rather
 # than linking upstream's committed generated/mhs.c. patches/README.md says
 # what each one is for.
-option(MHS_PATCH_MHS "Rebuild the compiler with source/langs/mhs/patches applied" ON)
+option(MHS_PATCH_MHS "Apply source/langs/mhs/patches to MicroHs" ON)
 file(GLOB MHS_PATCH_FILES ${CMAKE_CURRENT_SOURCE_DIR}/patches/*.diff)
 list(SORT MHS_PATCH_FILES)
-if(MHS_PATCH_MHS AND MHS_PATCH_FILES)
+file(GLOB MHS_RUNTIME_PATCH_FILES ${CMAKE_CURRENT_SOURCE_DIR}/patches/runtime/*.diff)
+list(SORT MHS_RUNTIME_PATCH_FILES)
+if(MHS_PATCH_MHS AND (MHS_PATCH_FILES OR MHS_RUNTIME_PATCH_FILES))
     find_program(PATCH_EXECUTABLE patch)
     if(NOT PATCH_EXECUTABLE)
         message(FATAL_ERROR
             "MHS: patch(1) not found, needed for source/langs/mhs/patches. "
             "Configure with -DMHS_PATCH_MHS=OFF to build without them.")
     endif()
+endif()
+if(MHS_PATCH_MHS AND MHS_PATCH_FILES)
     list(LENGTH MHS_PATCH_FILES MHS_PATCH_COUNT)
     message(STATUS "MHS: applying ${MHS_PATCH_COUNT} local patch(es), compiler rebuilt from source")
+endif()
+
+# patches/runtime/ patches the C runtime. It is copied and patched at configure
+# time, so every MHS_RUNTIME user below, including the VFS copy that `mhs -o`
+# links against, sees the patched files with no build-graph change.
+if(MHS_PATCH_MHS AND MHS_RUNTIME_PATCH_FILES)
+    set(MHS_PATCHED_RUNTIME ${CMAKE_CURRENT_BINARY_DIR}/mhs-runtime)
+    file(GLOB_RECURSE MHS_VENDORED_RUNTIME_FILES ${MHS_RUNTIME}/*)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        ${MHS_RUNTIME_PATCH_FILES} ${MHS_VENDORED_RUNTIME_FILES})
+    file(REMOVE_RECURSE ${MHS_PATCHED_RUNTIME})
+    file(COPY ${MHS_RUNTIME}/ DESTINATION ${MHS_PATCHED_RUNTIME})
+    foreach(patch_file ${MHS_RUNTIME_PATCH_FILES})
+        # -p3 strips a/src/runtime/, so the diffs keep upstream-relative paths
+        execute_process(
+            COMMAND ${PATCH_EXECUTABLE} -p3 -s -N -t -F0 -d ${MHS_PATCHED_RUNTIME} -i ${patch_file}
+            RESULT_VARIABLE patch_result)
+        if(NOT patch_result EQUAL 0)
+            message(FATAL_ERROR "MHS: runtime patch failed to apply: ${patch_file}")
+        endif()
+    endforeach()
+    list(LENGTH MHS_RUNTIME_PATCH_FILES MHS_RUNTIME_PATCH_COUNT)
+    message(STATUS "MHS: applying ${MHS_RUNTIME_PATCH_COUNT} runtime patch(es)")
+    set(MHS_RUNTIME ${MHS_PATCHED_RUNTIME})
 endif()
 
 # Build MicroHs compiler if it doesn't exist
