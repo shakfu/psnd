@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.4.0]
+
 Alda output now matches Alda 2.4.7 for all 60 example and shared-suite scores, checked by two CTest tests against `alda export` output (`docs/dev/conformance.md`). Before, none matched. **Most scores sound different**: every channel now starts at Alda's pan and track volume, and chords, voices, crams, per-part tempos and instrument names change notes in many examples.
 
 ### Added
@@ -40,7 +42,11 @@ Alda output now matches Alda 2.4.7 for all 60 example and shared-suite scores, c
 
 - **Alda parts are placed in seconds, and ticks are computed once the score is complete.** A part's own `(tempo N)` used to change the tempo of every part, because all parts shared one tick timeline. The MIDI tempo map now follows Alda: the first part's tempo changes, overridden by `(tempo! N)`.
 
-- **Alda channel settings are sent with the notes that need them.** Each note's channel gets its program, pan (CC 10) and track volume (CC 11) when they differ from what the channel holds, so a channel never keeps a previous part's settings. With more than 15 parts, a channel passes to another part once its part stops sounding; before, channels wrapped and later parts replaced earlier parts' instruments.
+- **Alda channel settings are sent with the notes that need them.** Each note's channel gets its program, pan (CC 10) and track volume (CC 11) when they differ from what the channel holds, so a channel never keeps a previous part's settings. With more than 15 parts, a channel passes to another part once its part stops sounding; before, channels wrapped and later parts replaced earlier parts' instruments. The drum channel no longer gets a program change.
+
+- **Alda highlighting distinguishes more constructs, and Nord comments no longer look like code.** The Alda query captured whole chords, rests and part declarations, and the first capture colours a character, so their parts took one colour; notes shared Nord's constant colour, a teal 22 units from its comment colour. The query now captures leaf nodes only: notes, durations, part names, attributes, octave changes, rests, markers and variables each have a class, chosen so that comments, notes, durations, part names and attributes stay apart in 15 of the 17 bundled themes (in Everforest attributes match durations). Nord's comments now use Nord's comment colour, nord3 brightened (`#616E88`), and its `preprocessor` colour, used only by Alda attributes, moves from nord15 to nord12 so attributes differ from durations.
+
+- **Alda API**: `AldaPartState` holds its position in seconds (`current_time`, with `time_scale` inside crams) instead of `current_tick`, its default duration as `default_beats` and `default_ms` instead of `default_duration` and `default_dots`, and no longer has voice fields; `AldaMarker.tick` is now `time`. Ticks exist only in `AldaScheduledEvent`, filled once a score is interpreted. `(quant 0)` is a valid quantization; -1 now means unset. `alda_percent_to_midi()` converts a 0-100 value as Alda does.
 
 - **Alda rounding**: volume, pan and track volume round half away from zero (pan 50 is 64, not 63), and dynamics use Alda's velocities (`pp` is 40, `p` 49, `mp` 59, `ppppp` 11).
 
@@ -56,7 +62,7 @@ Alda output now matches Alda 2.4.7 for all 60 example and shared-suite scores, c
 
 - **Alda instrument names**: 112 of Alda's 276 names and aliases, such as `guitar`, `vibes` and the saxophones, played as piano. The table is now generated from Alda's list (`scripts/gen_alda_instruments.py`), and `+` is allowed in names (`midi-bass+lead`).
 
-- **A note ending where the same pitch starts again was cut short.** In exported MIDI files the new note ended at once: the shared event buffer sorted by tick alone with an unstable sort, and midifile's sort puts note-ons first. In async playback a note could also precede its own program change. Both now order each tick as note-offs, settings, note-ons.
+- **A note ending where the same pitch starts again was cut short.** In exported MIDI files the new note ended at once: the shared event buffer sorted by tick alone with an unstable sort, and midifile's sort puts note-ons first. In async playback a note could also precede its own program change. Both now order each tick as note-offs, settings, note-ons: `shared_midi_events_sort()` breaks ties by event type rather than leaving them to qsort, the export keeps that order with `markSequence()` (vendored midifile's `sortTracksNoteOffsBeforeOns()` uses the note-ons-first comparator too), and the async scheduler's sort is now `shared_async_sort_events()`.
 
 - **Exported MIDI files had several tempo events at tick 0**, so the file's tempo depended on sort order. The starting tempo is now written once.
 

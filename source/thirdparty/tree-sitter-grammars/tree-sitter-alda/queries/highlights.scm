@@ -1,63 +1,59 @@
 ; Alda syntax highlighting queries
+;
+; Only leaf nodes are captured: psnd colours each character by the first
+; capture that covers it, so a capture on an enclosing node (a chord, a rest)
+; would hide everything inside it.
 
-; Comments
 (comment) @comment
 
-; Strings
-(string) @string
+; Parts: piano:, violin/viola "strings":
+(instrument_call (identifier) @type)
+(instrument_call (string) @string)
+(instrument_call ":" @punctuation.delimiter)
+(instrument_call "/" @punctuation.delimiter)
 
-; Numbers and durations
+; Variables
+(variable_definition (identifier) @function)
+(variable_reference (identifier) @function.call)
+"=" @operator
+
+; Notes and rests
+(note_letter) @variable
+(accidental) @operator
+(rest_letter) @constant.builtin
+(slur) @operator
+
+; Durations
 (note_length) @number
 (duration_ms) @number
 (duration_s) @number
-(sexp_number) @number
+(dot) @number
+(tie_duration) @number
 
-; Notes and pitches
-(note_letter) @constant
-(pitch) @constant
-
-; Accidentals and slurs
-(accidental) @operator
-(slur) @operator
-
-; Rests
-(rest) @constant.builtin
-
-; Octave control
+; Octaves
 (octave_set) @keyword
-(octave_up) @operator
-(octave_down) @operator
+(octave_up) @keyword
+(octave_down) @keyword
 
-; Chords
-(chord) @constant
-
-; Instruments and parts
-(instrument_call) @function
-(identifier) @variable
-
-; Markers
+; Structure
+(barline) @punctuation.delimiter
+(voice_marker) @keyword.control
 (marker) @label
 (at_marker) @label
-(voice_marker) @keyword
-
-; Grouping
+(repeat_count) @keyword.operator
+(on_repetitions) @keyword.operator
 (cram ["{" "}"] @punctuation.bracket)
 (bracket_seq ["[" "]"] @punctuation.bracket)
+(chord "/" @punctuation.delimiter)
 
-; Repetition
-(repeat_count) @number
-(on_repetitions) @number
-
-; S-expressions (Lisp-like)
+; Attributes: (tempo 120), (key-sig '(e (flat)))
+; Quoted data before the attribute name pattern, which would otherwise win
+(quoted_symbol (sexp_symbol) @constant)
+(quoted_list (sexp (sexp_symbol) @constant))
+(quoted_list (sexp (sexp (sexp_symbol) @constant)))
+(sexp . "(" . (sexp_symbol) @preprocessor)
+(sexp_symbol) @variable.parameter
+(sexp_number) @number
+(string) @string
 (sexp ["(" ")"] @punctuation.bracket)
-(sexp_symbol) @function.builtin
-(quoted_list) @constant
-(quoted_symbol) @constant
-
-; Operators and delimiters
-(barline) @punctuation.delimiter
-(dot) @operator
-(tie_duration) @operator
-"=" @operator
-"/" @operator
-":" @punctuation.delimiter
+"'" @punctuation.special

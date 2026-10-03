@@ -412,7 +412,7 @@
     "fields": {},
     "children": {
       "multiple": true,
-      "required": false,
+      "required": true,
       "types": [
         {
           "type": "duration",
@@ -424,6 +424,10 @@
         },
         {
           "type": "repeat_count",
+          "named": true
+        },
+        {
+          "type": "rest_letter",
           "named": true
         }
       ]
@@ -761,6 +765,10 @@
   },
   {
     "type": "repeat_count",
+    "named": true
+  },
+  {
+    "type": "rest_letter",
     "named": true
   },
   {

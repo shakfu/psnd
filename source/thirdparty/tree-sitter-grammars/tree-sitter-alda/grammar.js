@@ -108,9 +108,11 @@ module.exports = grammar({
 
     slur: $ => '~',
 
+    rest_letter: $ => 'r',
+
     // Rest: r, r4, r4., etc.
     rest: $ => prec.right(seq(
-      /r/,
+      $.rest_letter,
       optional($.duration),
       optional($.repeat_count),
       optional($.on_repetitions),

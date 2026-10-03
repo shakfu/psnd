@@ -319,6 +319,10 @@
       "type": "STRING",
       "value": "~"
     },
+    "rest_letter": {
+      "type": "STRING",
+      "value": "r"
+    },
     "rest": {
       "type": "PREC_RIGHT",
       "value": 0,
@@ -326,8 +330,8 @@
         "type": "SEQ",
         "members": [
           {
-            "type": "PATTERN",
-            "value": "r"
+            "type": "SYMBOL",
+            "name": "rest_letter"
           },
           {
             "type": "CHOICE",
