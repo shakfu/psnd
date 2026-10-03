@@ -769,7 +769,19 @@ JoyQuotation* joy_parse(const char* source) {
 
 void joy_eval_line(JoyContext* ctx, const char* line) {
     JoyQuotation* quot = joy_parse(line);
+    jmp_buf* outer = ctx->error_jmp;
+    jmp_buf local;
+    if (outer) {
+        /* A Joy error longjmps to the caller; free quot on the way */
+        ctx->error_jmp = &local;
+        if (setjmp(local) != 0) {
+            ctx->error_jmp = outer;
+            joy_quotation_free(quot);
+            longjmp(*outer, 1);
+        }
+    }
     joy_execute_quotation(ctx, quot);
+    ctx->error_jmp = outer;
     joy_quotation_free(quot);
 }
 

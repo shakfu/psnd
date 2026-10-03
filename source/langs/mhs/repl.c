@@ -808,7 +808,7 @@ static int run_mhs_interactive_repl(int mhs_argc, char **mhs_argv, MhsReplArgs *
 
     /* Cleanup editor */
     repl_editor_cleanup(&ed);
-    /* Note: syntax_ctx doesn't have Lua host, so minimal cleanup needed */
+    editor_ctx_free(&syntax_ctx);
 
     /* Signal MHS to exit by sending :quit and closing PTY */
     if (g_mhs_pty_master >= 0) {

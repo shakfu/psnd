@@ -142,6 +142,7 @@ TEST(repl_cmd_list) {
     SharedContext ctx = {0};
     int result = shared_process_command(&ctx, ":list", NULL);
     ASSERT_EQ(result, REPL_CMD_HANDLED);
+    shared_context_cleanup(&ctx);
 }
 
 TEST(repl_cmd_list_short) {
@@ -149,6 +150,7 @@ TEST(repl_cmd_list_short) {
     SharedContext ctx = {0};
     int result = shared_process_command(&ctx, ":l", NULL);
     ASSERT_EQ(result, REPL_CMD_HANDLED);
+    shared_context_cleanup(&ctx);
 }
 
 /* ============================================================================
@@ -427,6 +429,7 @@ TEST(repl_cmd_virtual_default) {
     /* May fail if MIDI not available, but should not crash */
     int result = shared_process_command(&ctx, ":virtual", NULL);
     ASSERT_EQ(result, REPL_CMD_HANDLED);
+    shared_context_cleanup(&ctx);
 }
 
 TEST(repl_cmd_virtual_named) {
@@ -434,6 +437,7 @@ TEST(repl_cmd_virtual_named) {
     SharedContext ctx = {0};
     int result = shared_process_command(&ctx, ":virtual MyPort", NULL);
     ASSERT_EQ(result, REPL_CMD_HANDLED);
+    shared_context_cleanup(&ctx);
 }
 
 /* ============================================================================

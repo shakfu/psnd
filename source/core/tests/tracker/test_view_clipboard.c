@@ -785,6 +785,33 @@ TEST(paste_single_cell) {
     free_test_view(view);
 }
 
+TEST(paste_over_filled_cell_undo_restores_it) {
+    TrackerView* view = create_test_view_with_song(16, 4);
+    ASSERT_NOT_NULL(view);
+
+    TrackerPattern* pattern = tracker_view_get_current_pattern(view);
+    set_test_expression(pattern, 0, 0, "C4");
+    set_test_expression(pattern, 5, 1, "E4");
+
+    view->state.cursor_track = 0;
+    view->state.cursor_row = 0;
+    tracker_view_copy(view);
+
+    view->state.cursor_track = 1;
+    view->state.cursor_row = 5;
+    ASSERT_TRUE(tracker_view_paste(view));
+
+    TrackerCell* cell = tracker_pattern_get_cell(pattern, 5, 1);
+    ASSERT_NOT_NULL(cell);
+    ASSERT_STR_EQ(cell->expression, "C4");
+
+    /* The undo snapshot must hold the overwritten value, not freed memory */
+    ASSERT_TRUE(tracker_view_undo(view));
+    ASSERT_STR_EQ(cell->expression, "E4");
+
+    free_test_view(view);
+}
+
 TEST(paste_multiple_cells) {
     TrackerView* view = create_test_view_with_song(16, 4);
     ASSERT_NOT_NULL(view);
@@ -1302,6 +1329,7 @@ BEGIN_TEST_SUITE("Tracker View Clipboard Tests")
     RUN_TEST(paste_no_song_returns_false);
     RUN_TEST(paste_no_clipboard_returns_false);
     RUN_TEST(paste_single_cell);
+    RUN_TEST(paste_over_filled_cell_undo_restores_it);
     RUN_TEST(paste_multiple_cells);
     RUN_TEST(paste_clips_at_boundary);
 

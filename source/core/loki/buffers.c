@@ -196,9 +196,6 @@ int buffer_create_in(buffer_manager_t *mgr, const char *filename) {
         buf->ctx.lua_host = mgr->shared_lua_host;
     }
 
-    /* Initialize undo system for new buffer */
-    undo_init(&buf->ctx, 1000, 10 * 1024 * 1024);  /* 1000 ops, 10MB limit */
-
     /* Open file if provided */
     if (filename) {
         if (editor_open(&buf->ctx, (char *)filename) != 0) {

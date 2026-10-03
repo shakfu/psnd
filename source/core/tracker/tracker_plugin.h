@@ -435,7 +435,8 @@ struct CompiledCell {
     TrackerPlugin* plugin;        /* plugin that handles this cell */
     bool is_generator;            /* true if must re-evaluate each trigger */
 
-    union {
+    /* A struct, not a union: a static cell caches its phrase while keeping its source */
+    struct {
         /* For static expressions: cached phrase */
         TrackerPhrase* cached_phrase;
 

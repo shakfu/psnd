@@ -90,6 +90,7 @@ static ssize_t getline(char **lineptr, size_t *n, FILE *stream) {
 #include "undo.h"
 #include "buffers.h"
 #include "syntax.h"
+#include "treesitter.h"
 #include "indent.h"
 #include "lang_bridge.h"
 #include "loki/link.h"
@@ -179,6 +180,13 @@ void editor_ctx_free(editor_ctx_t *ctx) {
 
     /* Free indent configuration */
     free(ctx->model.indent_config);
+
+#ifdef LOKI_USE_LINENOISE
+    if (ctx->model.ts_state) {
+        treesitter_free(ctx->model.ts_state);
+        ctx->model.ts_state = NULL;
+    }
+#endif
 
     /* Free window manager */
     if (ctx->wm) {
@@ -409,8 +417,8 @@ void editor_row_append_string(editor_ctx_t *ctx, t_erow *row, char *s, size_t le
 /* Delete the character at offset 'at' from the specified row. */
 void editor_row_del_char(editor_ctx_t *ctx, t_erow *row, int at) {
     if (row->size <= at) return;
-    /* Include null terminator in move (+1 for the null byte) */
-    memmove(row->chars+at,row->chars+at+1,row->size-at+1);
+    /* Bytes at+1..size, which includes the null terminator */
+    memmove(row->chars+at,row->chars+at+1,row->size-at);
     row->size--;
     editor_update_row(ctx, row);
     ctx->model.dirty++;

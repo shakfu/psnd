@@ -216,7 +216,8 @@ test-minihost-csound: psnd-minihost-csound
 
 # Own build dir: CMake caches PSND_ENABLE_ASAN, which would leak into `make test`
 test-asan:
-	@$(MAKE) --no-print-directory test-tsf BUILD_DIR=$(ASAN_BUILD_DIR) \
+	@LSAN_OPTIONS=suppressions=$(CURDIR)/scripts/lsan.supp:print_suppressions=0 \
+		$(MAKE) --no-print-directory test-tsf BUILD_DIR=$(ASAN_BUILD_DIR) \
 		EXTRA_CMAKE_ARGS="-DPSND_ENABLE_ASAN=ON $(EXTRA_CMAKE_ARGS)"
 
 # Vendored trees carry their upstream .gitignore, which can drop a required

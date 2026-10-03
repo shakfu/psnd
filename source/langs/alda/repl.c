@@ -659,6 +659,7 @@ int alda_repl_main(int argc, char **argv) {
             lua_host_free(syntax_ctx.lua_host);
             syntax_ctx.lua_host = NULL;
         }
+        editor_ctx_free(&syntax_ctx);
     }
 
     /* Cleanup */

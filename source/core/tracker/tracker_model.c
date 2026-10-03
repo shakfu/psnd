@@ -3,6 +3,7 @@
  */
 
 #include "tracker_model.h"
+#include "tracker_plugin.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -320,8 +321,8 @@ void tracker_cell_clear(TrackerCell* cell) {
     free(cell->expression);
     free(cell->language_id);
     tracker_fx_chain_clear(&cell->fx_chain);
-
-    /* Note: compiled is owned by engine, don't free here */
+    /* The cell owns its compiled form; nothing else frees it */
+    tracker_compiled_cell_free(cell->compiled);
 
     tracker_cell_init(cell);
 }
@@ -407,7 +408,10 @@ void tracker_track_free(TrackerTrack* track, int num_rows) {
         free(track->cells);
     }
 
-    /* Note: compiled_fx is owned by engine */
+    if (track->compiled_fx) {
+        tracker_compiled_fx_chain_free(track->compiled_fx);
+        free(track->compiled_fx);
+    }
 
     free(track);
 }
@@ -467,7 +471,14 @@ TrackerPattern* tracker_pattern_new(int num_rows, int num_tracks, const char* na
 
         /* Create default tracks */
         for (int i = 0; i < num_tracks; i++) {
-            pattern->tracks[i] = *tracker_track_new(num_rows, NULL, i % 16);
+            TrackerTrack* track = tracker_track_new(num_rows, NULL, i % 16);
+            if (!track) {
+                tracker_pattern_free(pattern);
+                return NULL;
+            }
+            /* Tracks are stored inline: take the contents, free the shell */
+            pattern->tracks[i] = *track;
+            free(track);
             pattern->num_tracks++;
         }
     }
@@ -484,6 +495,10 @@ void tracker_pattern_free(TrackerPattern* pattern) {
         /* Free track contents but not the track struct itself (it's inline) */
         free(pattern->tracks[i].name);
         tracker_fx_chain_clear(&pattern->tracks[i].fx_chain);
+        if (pattern->tracks[i].compiled_fx) {
+            tracker_compiled_fx_chain_free(pattern->tracks[i].compiled_fx);
+            free(pattern->tracks[i].compiled_fx);
+        }
         if (pattern->tracks[i].cells) {
             for (int j = 0; j < pattern->num_rows; j++) {
                 tracker_cell_clear(&pattern->tracks[i].cells[j]);
@@ -617,7 +632,10 @@ void tracker_song_free(TrackerSong* song) {
     /* Free phrase library */
     tracker_phrase_library_clear(&song->phrase_library);
 
-    /* Note: compiled_master_fx is owned by engine */
+    if (song->compiled_master_fx) {
+        tracker_compiled_fx_chain_free(song->compiled_master_fx);
+        free(song->compiled_master_fx);
+    }
 
     free(song);
 }

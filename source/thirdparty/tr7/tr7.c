@@ -21127,6 +21127,7 @@ static void scheme_deinit(tr7_engine_t tsc)
    tsc->line_starts = TR7_NIL;
 #endif
    tsc->gc_verbose = 0;
+   ok_to_freely_gc(tsc);  /* psnd: recents are GC roots; ports left there were never finalized */
    collect_garbage(tsc);
 
    for (i = 0; i < tsc->nmemseg; i++)

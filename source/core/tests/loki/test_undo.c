@@ -37,7 +37,8 @@ static void init_ctx_with_undo(editor_ctx_t *ctx, const char *text) {
     ctx->view.screenrows = 24;
     ctx->view.screencols = 80;
 
-    /* Initialize undo with reasonable limits */
+    /* Replace the default undo state from editor_ctx_init */
+    undo_free(ctx);
     undo_init(ctx, 100, 1024 * 1024);  /* 100 entries, 1MB */
 }
 
@@ -60,6 +61,7 @@ static void init_multiline_ctx_with_undo(editor_ctx_t *ctx, int num_lines, const
     ctx->view.screenrows = 24;
     ctx->view.screencols = 80;
 
+    undo_free(ctx);
     undo_init(ctx, 100, 1024 * 1024);
 }
 
@@ -432,7 +434,8 @@ TEST(undo_respects_capacity_limit) {
     ctx.view.screenrows = 24;
     ctx.view.screencols = 80;
 
-    /* Initialize with small capacity */
+    /* Replace the default undo state with a small one */
+    undo_free(&ctx);
     undo_init(&ctx, 5, 1024 * 1024);  /* Only 5 entries */
 
     /* Record more operations than capacity */

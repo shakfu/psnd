@@ -22,7 +22,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Added
+
+- **`make test-asan`**: runs the `test-tsf` suite with `PSND_ENABLE_ASAN` in `build-asan/`, so the cached option stays out of `make test`. `scripts/lsan.supp` suppresses the exit-time MicroHs decompression buffer. ASan builds skip stripping `psnd`, which LSan suppressions and readable stack traces need. All 83 tests pass under it.
+
 ### Fixed
+
+- **Deleting a character read one byte past the row**: `editor_row_del_char` moved `size-at+1` bytes from `at+1`, one more than the row holds with its terminator. Delete, undo, selection delete and electric indent all reached it; ASan reported it in five editor test suites.
+
+- **Pasting over a non-empty tracker cell used freed memory**: the undo snapshot was a struct copy of the target, so clearing the target freed the snapshot's strings. Undo then recorded freed memory, and cleanup freed the expression twice.
+
+- **Memory leaks found by `make test-asan`**:
+  - Tracker: compiled cells and compiled FX chains had no owner; the model said the engine freed them and the engine said the model did. Cells, tracks and songs now free their own. `CompiledCell` kept its cached phrase in a union with the compiled expression, so caching overwrote one with the other; the fields are now separate.
+  - Tracker: `tracker_pattern_new` leaked every default track struct, `tracker_undo_record` leaked actions recorded during undo or redo, and an unknown FX transform leaked the chain.
+  - Editor: each new buffer ran `undo_init` twice and leaked the first state. `editor_ctx_free` now frees tree-sitter state, and the alda, bog and mhs REPLs free their syntax context.
+  - Joy: a runtime error leaked the parsed line, because the `longjmp` skipped its free.
+  - Bog: a parse error that led to a second error leaked the first message. The parser now reports the first error, which names the real cause.
+  - TR7: engine teardown left the recent-allocation list as a GC root, so ports set through the C API were never finalized. Patched in the vendored `tr7.c`, marked `psnd:`.
+
+- **Typing into a tracker cell wrote past the edit buffer**: entering edit mode allocated the cell text's length plus one, but recorded 256 bytes more as capacity. The insert path therefore never grew the buffer, and the first keystroke wrote past it.
 
 - **Alda parse errors leaked the partial AST**: `alda_parse()` returned NULL without freeing the tree that error recovery had built, so every REPL or editor evaluation with a syntax error leaked it. LeakSanitizer found 1342 leaked allocations across `test_alda_parser` and `test_alda_parser_fuzz`; none remain.
 

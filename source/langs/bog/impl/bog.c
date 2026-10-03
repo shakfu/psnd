@@ -333,7 +333,7 @@ typedef struct GoalNode GoalNode;
 struct GoalNode {
     GoalNodeType type;
     BogTerm* term;
-    char* op;
+    const char* op;
     GoalNode* left;
     GoalNode* right;
 };
@@ -418,6 +418,13 @@ BogTerm* bog_make_expr(BogArena* arena, char op, BogTerm* left,
     return t;
 }
 
+/* Keep the first error: parsing continues after one, and later errors are consequences */
+static void parser_set_error(Parser* parser, const char* msg)
+{
+    if (!parser->error)
+        parser->error = strdup(msg);
+}
+
 static GoalNode* make_goal_node(Parser* parser, GoalNodeType type)
 {
     GoalNode* node = (GoalNode*)bog_arena_alloc(parser->arena,
@@ -438,11 +445,11 @@ static Token* parser_eat(Parser* parser, TokenType type, const char* value)
 {
     Token* tok = parser_peek(parser);
     if (!tok || tok->type != type) {
-        parser->error = strdup("Unexpected token");
+        parser_set_error(parser, "Unexpected token");
         return NULL;
     }
     if (value && (!tok->text || strcmp(tok->text, value) != 0)) {
-        parser->error = strdup("Unexpected token value");
+        parser_set_error(parser, "Unexpected token value");
         return NULL;
     }
     parser->index++;
@@ -456,7 +463,7 @@ static BogTerm* parse_primary(Parser* parser)
 {
     Token* tok = parser_peek(parser);
     if (!tok) {
-        parser->error = strdup("Unexpected end of input");
+        parser_set_error(parser, "Unexpected end of input");
         return NULL;
     }
     if (tok->type == TOKEN_NUMBER) {
@@ -554,7 +561,7 @@ static BogTerm* parse_primary(Parser* parser)
         parser_eat(parser, TOKEN_SYM, ")");
         return inner;
     }
-    parser->error = strdup("Bad term");
+    parser_set_error(parser, "Bad term");
     return NULL;
 }
 
@@ -628,7 +635,7 @@ static GoalNode* parse_goal_term(Parser* parser)
     if (is_comparison_token(tok)) {
         GoalNode* node = make_goal_node(parser, GOAL_NODE_COMPARISON);
         node->term = left;
-        node->op = tok->text ? strdup(tok->text) : NULL;
+        node->op = tok->text ? bog_arena_strdup(parser->arena, tok->text) : NULL;
         parser_eat(parser, tok->type, tok->text);
         node->right = make_goal_node(parser, GOAL_NODE_TERM);
         node->right->term = parse_expression(parser);
@@ -716,7 +723,7 @@ static BogTerm* convert_comparison(Parser* parser, GoalNode* node)
     else if (strcmp(op, "is") == 0)
         functor = "is";
     if (!functor) {
-        parser->error = strdup("Unsupported operator");
+        parser_set_error(parser, "Unsupported operator");
         return NULL;
     }
     BogTerm* args[2];
@@ -861,6 +868,8 @@ BogProgram* bog_parse_program(const char* src, BogArena* arena,
     if (parser.error) {
         if (error_message)
             *error_message = parser.error;
+        else
+            free(parser.error);
         token_vec_free(&parser.tokens);
         return NULL;
     }
@@ -875,6 +884,8 @@ BogProgram* bog_parse_program(const char* src, BogArena* arena,
         if (parser.error) {
             if (error_message)
                 *error_message = parser.error;
+            else
+                free(parser.error);
             token_vec_free(&parser.tokens);
             return NULL;
         }

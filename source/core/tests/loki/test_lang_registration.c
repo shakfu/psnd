@@ -22,14 +22,6 @@
  * but we can test them indirectly through Lua) */
 
 /* Helper to create a test Lua state */
-static lua_State *create_test_lua_state() {
-    lua_State *L = luaL_newstate();
-    if (L) {
-        luaL_openlibs(L);
-    }
-    return L;
-}
-
 /* Helper to initialize context with Lua for tests */
 static void init_ctx_with_lua(editor_ctx_t *ctx) {
     editor_ctx_init(ctx);
@@ -51,9 +43,6 @@ static void free_ctx_with_lua(editor_ctx_t *ctx) {
 
 /* Test: register_language with valid minimal config */
 TEST(register_language_minimal_config) {
-    lua_State *L = create_test_lua_state();
-    ASSERT_NOT_NULL(L);
-
     /* Push loki table and register_language function */
     editor_ctx_t ctx;
     init_ctx_with_lua(&ctx);

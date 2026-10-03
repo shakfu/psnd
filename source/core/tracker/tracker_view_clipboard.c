@@ -287,7 +287,9 @@ bool tracker_view_paste(TrackerView* view) {
             }
 
             /* Record undo for this cell */
-            TrackerCell old_cell = *target;
+            /* Clone: clearing target frees what a struct copy would share */
+            TrackerCell old_cell;
+            tracker_cell_clone(&old_cell, target);
             tracker_cell_clear(target);
             tracker_cell_clone(target, &view->clipboard.cells[idx]);
             target->dirty = true;
@@ -296,10 +298,7 @@ bool tracker_view_paste(TrackerView* view) {
                 view->state.cursor_pattern, target_track, target_row,
                 &old_cell, target);
 
-            /* Clean up old cell state (but not the target) */
-            free(old_cell.expression);
-            free(old_cell.language_id);
-            tracker_fx_chain_clear(&old_cell.fx_chain);
+            tracker_cell_clear(&old_cell);
 
             idx++;
         }

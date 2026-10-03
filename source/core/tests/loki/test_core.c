@@ -28,6 +28,7 @@ TEST(editor_ctx_init_initializes_all_fields) {
     ASSERT_NULL(ctx.model.filename);
     ASSERT_EQ(ctx.view.mode, MODE_NORMAL);
     /* Note: winsize_changed now lives in TerminalHost, tested separately */
+    editor_ctx_free(&ctx);
 }
 
 /* Test separator detection */
@@ -76,11 +77,7 @@ TEST(editor_insert_char_adds_character_to_empty_buffer) {
     ASSERT_EQ(ctx.model.row[0].chars[0], 'a');
     ASSERT_EQ(ctx.model.dirty, 1);
 
-    /* Cleanup */
-    free(ctx.model.row[0].chars);
-    free(ctx.model.row[0].render);
-    free(ctx.model.row[0].hl);
-    free(ctx.model.row);
+    editor_ctx_free(&ctx);
 }
 
 /* Test newline insertion */
@@ -124,13 +121,7 @@ TEST(editor_insert_newline_splits_line) {
     ASSERT_EQ(ctx.view.cy, 1);
     ASSERT_EQ(ctx.view.cx, 0);
 
-    /* Cleanup */
-    for (int i = 0; i < ctx.model.numrows; i++) {
-        free(ctx.model.row[i].chars);
-        free(ctx.model.row[i].render);
-        free(ctx.model.row[i].hl);
-    }
-    free(ctx.model.row);
+    editor_ctx_free(&ctx);
 }
 
 /* Test cursor movement doesn't go out of bounds */
@@ -176,13 +167,7 @@ TEST(cursor_stays_within_bounds) {
     ASSERT_TRUE(ctx.view.cy >= 0);
     ASSERT_TRUE(ctx.view.cy < ctx.model.numrows);
 
-    /* Cleanup */
-    for (int i = 0; i < ctx.model.numrows; i++) {
-        free(ctx.model.row[i].chars);
-        free(ctx.model.row[i].render);
-        free(ctx.model.row[i].hl);
-    }
-    free(ctx.model.row);
+    editor_ctx_free(&ctx);
 }
 
 /* Test dirty flag management */
@@ -205,11 +190,7 @@ TEST(dirty_flag_set_on_modification) {
 
     ASSERT_EQ(ctx.model.dirty, 1);
 
-    /* Cleanup */
-    free(ctx.model.row[0].chars);
-    free(ctx.model.row[0].render);
-    free(ctx.model.row[0].hl);
-    free(ctx.model.row);
+    editor_ctx_free(&ctx);
 }
 
 /* Test mode management */
@@ -227,6 +208,7 @@ TEST(mode_switching_works) {
 
     ctx.view.mode = MODE_NORMAL;
     ASSERT_EQ(ctx.view.mode, MODE_NORMAL);
+    editor_ctx_free(&ctx);
 }
 
 /* Test window resize flag (now in TerminalHost) */

@@ -207,7 +207,11 @@ void tracker_undo_clear(TrackerUndoStack* stack) {
 
 void tracker_undo_record(TrackerUndoStack* stack, TrackerUndoAction* action) {
     if (!stack || !action) return;
-    if (stack->in_undo) return;  /* don't record during undo/redo */
+    if (stack->in_undo) {
+        /* Don't record during undo/redo; the stack owns action either way */
+        tracker_undo_action_free(action);
+        return;
+    }
 
     /* Clear redo stack when new action is recorded */
     free_action_chain(stack->redo_head);

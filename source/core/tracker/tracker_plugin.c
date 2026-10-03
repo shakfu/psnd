@@ -400,18 +400,15 @@ CompiledCell* tracker_compile_cell(const TrackerCell* cell,
 void tracker_compiled_cell_free(CompiledCell* compiled) {
     if (!compiled) return;
 
-    /* Free phrase or dynamic content */
-    if (!compiled->is_generator && compiled->content.cached_phrase) {
-        tracker_phrase_free(compiled->content.cached_phrase);
-    } else {
-        /* Free compiled expression if plugin supports it */
-        if (compiled->plugin &&
-            compiled->content.dynamic.compiled_expr &&
-            compiled->plugin->free_compiled) {
-            compiled->plugin->free_compiled(compiled->content.dynamic.compiled_expr);
-        }
-        free(compiled->content.dynamic.source_expr);
+    tracker_phrase_free(compiled->content.cached_phrase);
+
+    /* Free compiled expression if plugin supports it */
+    if (compiled->plugin &&
+        compiled->content.dynamic.compiled_expr &&
+        compiled->plugin->free_compiled) {
+        compiled->plugin->free_compiled(compiled->content.dynamic.compiled_expr);
     }
+    free(compiled->content.dynamic.source_expr);
 
     /* Free FX chain */
     tracker_compiled_fx_chain_free(&compiled->fx_chain);
@@ -466,6 +463,7 @@ CompiledFxChain* tracker_compile_fx_chain(const TrackerFxChain* chain,
         if (!dest->fn) {
             /* Transform not found - error */
             tracker_compiled_fx_chain_free(compiled);
+            free(compiled);
             if (error_msg) *error_msg = "Unknown transform";
             return NULL;
         }

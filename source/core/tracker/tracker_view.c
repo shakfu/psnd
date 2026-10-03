@@ -2241,11 +2241,14 @@ void tracker_view_enter_edit(TrackerView* view) {
     if (!cell) return;
 
     /* Initialize edit buffer with current cell content */
+    const char* expr = cell->expression ? cell->expression : "";
+    int len = (int)strlen(expr);
     free(view->state.edit_buffer);
-    view->state.edit_buffer = str_dup(cell->expression ? cell->expression : "");
-    view->state.edit_buffer_len = view->state.edit_buffer ?
-        (int)strlen(view->state.edit_buffer) : 0;
-    view->state.edit_buffer_capacity = view->state.edit_buffer_len + 256;
+    /* Allocate the recorded capacity; tracker_view_edit_char grows only past it */
+    view->state.edit_buffer = malloc(len + 256);
+    if (view->state.edit_buffer) memcpy(view->state.edit_buffer, expr, len + 1);
+    view->state.edit_buffer_len = view->state.edit_buffer ? len : 0;
+    view->state.edit_buffer_capacity = view->state.edit_buffer ? len + 256 : 0;
     view->state.edit_cursor_pos = 0;  /* Start cursor at beginning of cell */
 
     view->state.edit_mode = TRACKER_EDIT_MODE_EDIT;

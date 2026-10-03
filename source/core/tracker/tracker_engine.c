@@ -641,7 +641,7 @@ void tracker_engine_unload_song(TrackerEngine* engine) {
     tracker_engine_cancel_all(engine);
     tracker_engine_all_notes_off(engine);
 
-    /* Free compiled caches (patterns own their compiled cells) */
+    /* Free compiled caches; cells and tracks own their compiled forms */
     free(engine->compiled_patterns);
     engine->compiled_patterns = NULL;
 
