@@ -63,6 +63,7 @@ int alda_schedule_event(AldaContext* ctx, int tick, AldaEventType type,
     evt->data1 = data1;
     evt->data2 = data2;
     evt->part_index = part_index;
+    evt->seq = ctx->event_count;
 #ifdef ALDA_SOURCE_TRACKING
     evt->source_line = ctx->source_tracking_line;
 #endif
@@ -180,7 +181,12 @@ static int event_compare(const void* a, const void* b) {
     }
 
     /* Same type at same tick: sort by channel for consistency */
-    return ea->channel - eb->channel;
+    if (ea->channel != eb->channel) {
+        return ea->channel - eb->channel;
+    }
+
+    /* qsort is not stable (macOS, Windows): keep scheduling order explicitly */
+    return ea->seq - eb->seq;
 }
 
 void alda_events_sort(AldaContext* ctx) {

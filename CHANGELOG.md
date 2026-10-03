@@ -22,6 +22,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Fixed
+
+- Alda: same-tick events kept their scheduling order only on Linux. `event_compare` had no final tie-break, and `qsort` is unstable on macOS and Windows. Chord notes and per-note pan changes could swap, which failed `alda_interpreter_tests` and the `panning.alda` conformance check there. Events now carry their scheduling index as the last sort key. That index is cheaper than a hand-written stable sort.
+
 ## [0.4.0]
 
 Alda output now matches Alda 2.4.7 for all 60 example and shared-suite scores, checked by two CTest tests against `alda export` output (`docs/dev/conformance.md`). Before, none matched. **Most scores sound different**: every channel now starts at Alda's pan and track volume, and chords, voices, crams, per-part tempos and instrument names change notes in many examples.
