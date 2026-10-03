@@ -9,9 +9,10 @@
 		psnd-minihost minihost psnd-minihost-csound \
 		mhs-small mhs-src mhs-src-small no-mhs \
 		test-tsf test-csound test-fluid test-fluid-csound check-vendored \
-		test-web test-fluid-web test-full test-native test-minihost test-minihost-csound
+		test-web test-fluid-web test-full test-native test-minihost test-minihost-csound test-asan
 
 BUILD_DIR ?= build
+ASAN_BUILD_DIR ?= build-asan
 CMAKE ?= cmake
 
 all: build
@@ -212,6 +213,11 @@ test-minihost: psnd-minihost
 
 test-minihost-csound: psnd-minihost-csound
 	@$(PSND_CTEST)
+
+# Own build dir: CMake caches PSND_ENABLE_ASAN, which would leak into `make test`
+test-asan:
+	@$(MAKE) --no-print-directory test-tsf BUILD_DIR=$(ASAN_BUILD_DIR) \
+		EXTRA_CMAKE_ARGS="-DPSND_ENABLE_ASAN=ON $(EXTRA_CMAKE_ARGS)"
 
 # Vendored trees carry their upstream .gitignore, which can drop a required
 # file from every clone while the local build keeps working.
