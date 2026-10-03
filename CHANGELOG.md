@@ -26,6 +26,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 - **Alda parse errors leaked the partial AST**: `alda_parse()` returned NULL without freeing the tree that error recovery had built, so every REPL or editor evaluation with a syntax error leaked it. LeakSanitizer found 1342 leaked allocations across `test_alda_parser` and `test_alda_parser_fuzz`; none remain.
 
+- **Alda same-tick events kept their scheduling order only on Linux**: `event_compare` had no final tie-break, and `qsort` is unstable on macOS and Windows. Chord notes and per-note pan changes could swap, which failed `alda_interpreter_tests` and the `panning.alda` conformance check there. Events now carry their scheduling index as the last sort key. That index is cheaper than a hand-written stable sort.
+
+- **FluidSynth builds downloaded gcem despite the vendored copy**: at configure time, FluidSynth's `FindGCEM` searches `${CMAKE_SOURCE_DIR}/gcem`, which is the psnd root when FluidSynth is a subdirectory. A GitHub timeout then failed the macOS `fluid-web` release job. `GCEM_INCLUDE_DIR` is now preset to the vendored headers, which leaves the vendored FluidSynth unpatched.
+
+- **Linux builds downloaded readerwriterqueue from GitHub `master`**: libremidi fetches it whenever the PipeWire backend is not disabled, even when the PipeWire headers are absent and the backend is skipped. The backend is now opt-in with `-DBUILD_PIPEWIRE_BACKEND=ON`, which uses the vendored `source/thirdparty/readerwriterqueue` and fails at configure time if PipeWire is missing. Opt-in over auto-detection keeps the compiled backends the same on every machine; nothing in psnd selects the PipeWire API yet.
+
+- **Windows Csound builds intermittently failed to compile `csound_prelex.c`**: Csound builds a shared and a static library, and each target owns the same flex/bison outputs. Parallel MSBuild projects ran `win_flex` twice into one file. psnd links only the static library, so the shared one is now `EXCLUDE_FROM_ALL`. This also drops a redundant Csound compile from every Csound build.
+
+- **TR7 evaluations intermittently returned no value**: this flaked `tr7_reader_tests`. Upstream `scheme_init` never initializes `stack.safegap`, which is added to every stack-room request. A large stale heap value made each request exceed `stack_size_max`. The vendored `tr7.c` now initializes it, marked `psnd:`; this should go upstream.
+
 ## [0.4.0]
 
 Alda output now matches Alda 2.4.7 for all 60 example and shared-suite scores, checked by two CTest tests against `alda export` output (`docs/dev/conformance.md`). Before, none matched. **Most scores sound different**: every channel now starts at Alda's pan and track volume, and chords, voices, crams, per-part tempos and instrument names change notes in many examples.

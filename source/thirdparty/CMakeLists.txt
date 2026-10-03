@@ -23,7 +23,23 @@ set(LIBREMIDI_NO_JACK ON CACHE BOOL "" FORCE)
 # WinMM is sufficient for MIDI I/O on Windows.
 set(LIBREMIDI_NO_WINUWP ON CACHE BOOL "" FORCE)
 set(LIBREMIDI_NO_WINMIDI ON CACHE BOOL "" FORCE)
+option(BUILD_PIPEWIRE_BACKEND "Build libremidi's PipeWire MIDI backend" OFF)
+if(BUILD_PIPEWIRE_BACKEND)
+    # Defining this target first stops libremidi from fetching readerwriterqueue at configure time
+    add_library(readerwriterqueue INTERFACE)
+    target_include_directories(readerwriterqueue INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/readerwriterqueue)
+    set(LIBREMIDI_NO_PIPEWIRE OFF CACHE BOOL "" FORCE)
+else()
+    message(STATUS "PipeWire MIDI backend disabled (use -DBUILD_PIPEWIRE_BACKEND=ON to enable)")
+    set(LIBREMIDI_NO_PIPEWIRE ON CACHE BOOL "" FORCE)
+endif()
 add_subdirectory(libremidi)
+if(BUILD_PIPEWIRE_BACKEND)
+    get_target_property(_libremidi_defs libremidi INTERFACE_COMPILE_DEFINITIONS)
+    if(NOT "LIBREMIDI_PIPEWIRE" IN_LIST _libremidi_defs)
+        message(FATAL_ERROR "BUILD_PIPEWIRE_BACKEND is ON but libremidi did not enable PipeWire (install libpipewire-0.3-dev)")
+    endif()
+endif()
 
 # libuv - Async I/O (used by alda for async playback)
 set(LIBUV_BUILD_SHARED OFF CACHE BOOL "" FORCE)
@@ -173,6 +189,15 @@ if(BUILD_CSOUND_BACKEND)
 
     add_subdirectory(csound-6.18.1)
 
+    # Csound always adds a shared library alongside the static one we link. Both
+    # targets own the same flex/bison outputs, and parallel MSBuild projects ran
+    # win_flex twice into one csound_prelex.c, corrupting it.
+    foreach(_csound_shared CsoundLib64 csound64)
+        if(TARGET ${_csound_shared})
+            set_target_properties(${_csound_shared} PROPERTIES EXCLUDE_FROM_ALL TRUE)
+        endif()
+    endforeach()
+
     # Ensure sndfile is built before Csound links against it
     if(TARGET CsoundLib64-static)
         add_dependencies(CsoundLib64-static sndfile)
@@ -233,6 +258,10 @@ if(BUILD_FLUID_BACKEND)
     # Use C++11 for thread-safe locale instead of glib
     # This avoids the glib dependency for a leaner build
     set(osal "cpp11" CACHE STRING "" FORCE)
+
+    # FindGCEM looks under ${CMAKE_SOURCE_DIR}/gcem (the psnd root), misses the
+    # vendored copy, and downloads it from GitHub at configure time.
+    set(GCEM_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/fluidsynth/gcem/include" CACHE PATH "" FORCE)
 
     add_subdirectory(fluidsynth)
 

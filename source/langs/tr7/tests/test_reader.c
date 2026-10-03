@@ -581,6 +581,25 @@ TEST(read_nested_let) {
     teardown();
 }
 
+/* Hands tr7 memory that is not zeroed, as a reused heap block would be */
+static void *dirty_malloc(size_t size) {
+    void *p = malloc(size);
+    if (p) memset(p, 0xbe, size);
+    return p;
+}
+
+TEST(engine_init_ignores_heap_contents) {
+    /* scheme_init once left stack.safegap uninitialized; a large stale value
+     * made every evaluation return no values. */
+    tr7_config_t cfg;
+    tr7_config_init_default(&cfg);
+    cfg.malloc = dirty_malloc;
+    engine = tr7_engine_create(&cfg);
+    ASSERT_NOT_NULL(engine);
+    ASSERT_EQ(eval_int("42"), 42);
+    teardown();
+}
+
 /* ============================================================================
  * Test Runner
  * ============================================================================ */
@@ -678,5 +697,8 @@ BEGIN_TEST_SUITE("TR7 Reader Tests")
     RUN_TEST(read_if);
     RUN_TEST(read_let);
     RUN_TEST(read_nested_let);
+
+    /* Engine initialization */
+    RUN_TEST(engine_init_ignores_heap_contents);
 
 END_TEST_SUITE()

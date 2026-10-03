@@ -21028,6 +21028,9 @@ static int scheme_init(tr7_engine_t tsc, tr7_config_t *config)
    tsc->stack.oper = NULL;
    tsc->stack.head = NULL;
    tsc->stack.tail = NULL;
+#if GLOBAL_STACK_SAFETY
+   tsc->stack.safegap = STACK_SAFEGAP_INIT;  /* psnd: was left uninitialized */
+#endif
    tsc->nvalues = 0;
    tsc->symbols_set = TR7_NIL;
    tsc->c_nest = TR7_NIL;
