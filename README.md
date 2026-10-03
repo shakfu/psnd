@@ -428,11 +428,7 @@ psnd --web song.alda                 # Open file in web editor
 psnd --web -sf gm.sf2 song.joy       # Web editor with soundfont
 ```
 
-Open the URL printed at startup, or pass `--web-open` to have psnd hand it to
-the default browser. It carries a random per-session token that the WebSocket
-and `/api` endpoints require, so `http://localhost:8080` without it loads the
-page but cannot connect. The server binds `127.0.0.1` unless `--web-host` says
-otherwise.
+Open the URL printed at startup, or pass `--web-open` to have psnd hand it to the default browser. It carries a random per-session token that the WebSocket and `/api` endpoints require, so `http://localhost:8080` without it loads the page but cannot connect. The server binds `127.0.0.1` unless `--web-host` says otherwise.
 
 **Features:**
 
@@ -541,7 +537,9 @@ tempo = 120              # Default tempo
 Without `-sf`, psnd picks a SoundFont in this order:
 
 1. `PSND_SOUNDFONT` environment variable (`none` turns off 2 and 3)
+
 2. `[audio] soundfont` in `config.toml`
+
 3. The first General MIDI SoundFont found in `.psnd/soundfonts/`, `~/.psnd/soundfonts/`, `~/.aldakit/soundfonts/`, `~/.local/share/soundfonts/`, `~/.local/share/sounds/sf2/`, then the system directories (`/usr/share/sounds/sf2/` and `/usr/share/soundfonts/` on Linux, `/Library/Audio/Sounds/Banks/` on macOS)
 
 A SoundFont found by search (3) is used only when no MIDI output can reach a synth. ALSA's "Midi Through" and PipeWire's own ports do not count. `-p`, `--virtual`, `-cs` and `--plugin` always take precedence.
@@ -1676,9 +1674,7 @@ scripts/
   new_lang.py       # Language scaffolding generator
 ```
 
-Tests live beside the code they cover (`source/core/tests/` and
-`source/langs/<name>/tests/`) and are discovered automatically; run them with
-`ctest --test-dir build`.
+Tests live beside the code they cover (`source/core/tests/` and `source/langs/<name>/tests/`) and are discovered automatically; run them with `ctest --test-dir build`.
 
 ## Documentation
 

@@ -71,4 +71,14 @@ if(NOT WIN32)
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     )
     set_tests_properties(alda_midi_test_suite PROPERTIES LABELS "integration")
+
+    # Every example against Alda's own output (docs/dev/conformance.md)
+    add_test(
+        NAME alda_conformance_examples
+        COMMAND $<TARGET_FILE:test_alda_shared_suite>
+                "${CMAKE_CURRENT_SOURCE_DIR}/../examples"
+                "${CMAKE_CURRENT_SOURCE_DIR}/alda_reference"
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    )
+    set_tests_properties(alda_conformance_examples PROPERTIES LABELS "integration")
 endif()

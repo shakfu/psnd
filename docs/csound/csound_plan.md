@@ -23,8 +23,11 @@ Integrate Csound 6.18.1 as an optional synthesis backend for Psnd, driven by MID
 ### Key Design Decisions
 
 1. **Host-implemented audio I/O**: Csound renders to buffers; miniaudio handles output
+
 2. **MIDI via score events**: Simple `csoundInputMessage()` for note on/off
+
 3. **Modular build**: Csound is optional, controlled by CMake flag
+
 4. **Pre-defined instruments**: Ship default `.csd`, future: edit in editor
 
 ## Build Configuration
@@ -48,6 +51,7 @@ set(USE_GETTEXT OFF)
 ### Dependencies
 
 - **libsndfile**: Built from source in `thirdparty/libsndfile` (minimal config, no external codecs)
+
 - **All other Csound deps**: Disabled for minimal build
 
 See `docs/csound-deps.md` for manual build instructions.
@@ -171,24 +175,35 @@ f0 86400  ; Run for 24 hours
 ### Phase 1: Minimal Integration (COMPLETE)
 
 1. Add Csound as optional CMake subdirectory
+
 2. Create csound_backend.h/c with core API
+
 3. Integrate audio rendering with miniaudio
+
 4. Ship default instruments
+
 5. Basic note on/off functionality
+
 6. Lua API for loading CSD and enabling Csound
 
 ### Phase 2: Full MIDI Support (COMPLETE)
 
 1. Program change -> instrument selection (tracked per channel)
+
 2. Control change -> real-time parameters (via Csound control channels)
+
 3. Pitch bend support (via control channels)
+
 4. Per-channel state tracking (fractional instrument IDs)
 
 ### Phase 3: Live Coding (Future)
 
 1. Lua API: `csound.compile(orc_string)`
+
 2. Editor syntax highlighting for .csd files
+
 3. Hot-reload instruments without stopping playback
+
 4. Error reporting to status bar
 
 ## Lua API
@@ -254,13 +269,19 @@ src/
 ## Risks and Mitigations
 
 1. **Build complexity**: Use Custom.cmake to minimize; provide CI scripts
+
 2. **Binary size**: Minimal build strips ~80% of opcodes
+
 3. **Latency**: Keep ksmps low (32-64); acceptable for most use
+
 4. **libsndfile dependency**: Common library, available everywhere
 
 ## Future Considerations
 
 - Csound 7 migration (API changes)
+
 - WebAssembly build using existing wasm/ infrastructure
+
 - Plugin architecture for user opcodes
+
 - Integration with Ableton Link tempo

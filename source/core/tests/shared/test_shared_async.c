@@ -348,6 +348,21 @@ TEST(async_schedule_tempo_null_safe) {
  * Tick-to-MS Conversion Tests
  * ============================================================================ */
 
+/* Within a tick: note-offs, then settings, then note-ons */
+TEST(async_sort_events_same_tick_order) {
+    SharedAsyncEvent events[3];
+    memset(events, 0, sizeof(events));
+    events[0].tick = 480; events[0].type = SHARED_ASYNC_NOTE_ON;  events[0].data1 = 60;
+    events[1].tick = 480; events[1].type = SHARED_ASYNC_PROGRAM;  events[1].data1 = 24;
+    events[2].tick = 480; events[2].type = SHARED_ASYNC_NOTE_OFF; events[2].data1 = 60;
+
+    shared_async_sort_events(events, 3, 1);
+
+    ASSERT_EQ(events[0].type, SHARED_ASYNC_NOTE_OFF);
+    ASSERT_EQ(events[1].type, SHARED_ASYNC_PROGRAM);
+    ASSERT_EQ(events[2].type, SHARED_ASYNC_NOTE_ON);
+}
+
 TEST(async_ticks_to_ms_120bpm) {
     /* At 120 BPM with 480 ticks per quarter:
      * 1 beat = 500ms, 480 ticks = 500ms
@@ -1027,6 +1042,7 @@ BEGIN_TEST_SUITE("Shared Async Playback Tests")
     RUN_TEST(async_schedule_tempo_null_safe);
 
     /* Tick-to-ms conversion */
+    RUN_TEST(async_sort_events_same_tick_order);
     RUN_TEST(async_ticks_to_ms_120bpm);
     RUN_TEST(async_ticks_to_ms_60bpm);
     RUN_TEST(async_ticks_to_ms_240bpm);

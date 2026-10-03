@@ -126,10 +126,7 @@ int example_eval(ExampleContext *ctx, const char *code) {
 
 ### CMake Library
 
-Create `source/langs/example/CMakeLists.txt`. Languages are auto-discovered by
-`scripts/cmake/psnd_languages.cmake`, which globs `source/langs/*/CMakeLists.txt`
-and generates the dispatch and config headers. **No other build file needs to be
-touched** — there is no central list to register in.
+Create `source/langs/example/CMakeLists.txt`. Languages are auto-discovered by `scripts/cmake/psnd_languages.cmake`, which globs `source/langs/*/CMakeLists.txt` and generates the dispatch and config headers. **No other build file needs to be touched** — there is no central list to register in.
 
 ```cmake
 # Example language
@@ -180,8 +177,7 @@ psnd_register_language(
 )
 ```
 
-Auto-discovery also creates a `LANG_EXAMPLE` CMake option (default `ON`), so the
-language can be excluded with `-DLANG_EXAMPLE=OFF`.
+Auto-discovery also creates a `LANG_EXAMPLE` CMake option (default `ON`), so the language can be excluded with `-DLANG_EXAMPLE=OFF`.
 
 ## Step 2: Implement the REPL
 
@@ -845,8 +841,7 @@ endmacro()
 add_example_test(parser)
 ```
 
-If a test reads fixture files, pass their location as an absolute path from
-CMake rather than hardcoding a path relative to the build directory:
+If a test reads fixture files, pass their location as an absolute path from CMake rather than hardcoding a path relative to the build directory:
 
 ```cmake
 target_compile_definitions(test_example_${TEST_NAME} PRIVATE

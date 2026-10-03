@@ -1,7 +1,6 @@
 # Csound Audio Integration - Debug Notes
 
-**Status**: FIXED - Audio working
-**Date**: 2026-01-14
+**Status**: FIXED - Audio working **Date**: 2026-01-14
 
 ## Summary
 
@@ -26,11 +25,17 @@ Added Csound routing to `async.c:send_event()` with highest priority (before TSF
 ## What Works
 
 - Csound 6.18.1 compiles and links correctly
+
 - CSD file loads without errors
+
 - Csound initializes and starts properly
+
 - Message suppression via `csoundCreateMessageBuffer()` works
+
 - Editor opens and shows "ALDA CSD" status
+
 - **Audio output works** when playing Alda code with Ctrl-P
+
 - MIDI events are correctly routed to Csound instruments
 
 ## Architecture
@@ -40,6 +45,7 @@ Added Csound routing to `async.c:send_event()` with highest priority (before TSF
 Each backend has its own independent miniaudio device:
 
 1. `tsf_backend.c` - Contains `MINIAUDIO_IMPLEMENTATION`, owns its own `ma_device` for TSF synthesis
+
 2. `csound_backend.c` - Has its own `ma_device` for Csound synthesis (includes `miniaudio.h` without implementation)
 
 The backends are completely independent - no delegation or shared audio devices. The `async.c` event dispatcher routes MIDI events to the appropriate backend based on which is enabled (Csound takes priority).
@@ -47,8 +53,11 @@ The backends are completely independent - no delegation or shared audio devices.
 ### Key Files
 
 - `thirdparty/alda-midi/lib/src/csound_backend.c` - Csound synthesis backend
+
 - `thirdparty/alda-midi/lib/src/tsf_backend.c` - TSF synthesis backend
+
 - `thirdparty/alda-midi/lib/include/alda/csound_backend.h` - Csound API
+
 - `.psnd/csound/default.csd` - Default Csound instruments
 
 ## Historical Notes
@@ -66,7 +75,9 @@ The `async.c` event dispatcher was only routing to TSF, ignoring Csound entirely
 The default CSD file (`.psnd/csound/default.csd`) was fixed for:
 
 - `endop` vs `endin` (opcodes use `endop`, instruments use `endin`)
+
 - FM synthesis instrument 2 (replaced `fmb3` with manual FM)
+
 - Added `--daemon` flag to CsOptions
 
 ## Build Command

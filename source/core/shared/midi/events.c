@@ -184,10 +184,28 @@ int shared_midi_events_ticks_per_quarter(void) {
  * Sorting (stable sort by tick)
  * ============================================================================ */
 
+/* Order within a tick: note-offs, then tempo, program and controller
+ * changes, then note-ons. A note ending where the same pitch starts again
+ * must end before the new one starts, and a note must find its channel's
+ * settings in place. qsort is not stable, so ties are broken explicitly. */
+static int type_rank(SharedMidiEventType type) {
+    switch (type) {
+        case SHARED_MIDI_NOTE_OFF: return 0;
+        case SHARED_MIDI_TEMPO:    return 1;
+        case SHARED_MIDI_PROGRAM:  return 2;
+        case SHARED_MIDI_CC:       return 3;
+        default:                   return 4;  /* note-on */
+    }
+}
+
 static int compare_events(const void *a, const void *b) {
     const SharedMidiEvent *ea = (const SharedMidiEvent *)a;
     const SharedMidiEvent *eb = (const SharedMidiEvent *)b;
-    return ea->tick - eb->tick;
+    if (ea->tick != eb->tick) return ea->tick - eb->tick;
+    int ra = type_rank(ea->type), rb = type_rank(eb->type);
+    if (ra != rb) return ra - rb;
+    if (ea->channel != eb->channel) return ea->channel - eb->channel;
+    return ea->data1 - eb->data1;
 }
 
 void shared_midi_events_sort(void) {

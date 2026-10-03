@@ -447,12 +447,18 @@ static void async_thread_fn(void* arg) {
  * Event Comparison for Sorting
  * ============================================================================ */
 
-/* Tie-break at the same time: note-offs before note-ons. */
+/* Tie-break at the same time: note-offs, then everything else, then
+ * note-ons, so a note finds its channel's program and controllers in place
+ * when they change on the note's own tick. */
+static int event_rank(const SharedAsyncEvent* e) {
+    if (e->type == SHARED_ASYNC_NOTE_OFF) return 0;
+    if (e->type == SHARED_ASYNC_NOTE_ON || e->type == SHARED_ASYNC_NOTE) return 2;
+    return 1;
+}
+
 static int compare_event_type(const SharedAsyncEvent* ea,
                               const SharedAsyncEvent* eb) {
-    int type_a = (ea->type == SHARED_ASYNC_NOTE_OFF) ? 0 : 1;
-    int type_b = (eb->type == SHARED_ASYNC_NOTE_OFF) ? 0 : 1;
-    return type_a - type_b;
+    return event_rank(ea) - event_rank(eb);
 }
 
 /* Two self-contained comparators select the timing axis without any shared
@@ -471,6 +477,12 @@ static int compare_events_by_ticks(const void* a, const void* b) {
     int time_diff = ea->tick - eb->tick;
     if (time_diff != 0) return time_diff;
     return compare_event_type(ea, eb);
+}
+
+void shared_async_sort_events(SharedAsyncEvent* events, int count, int use_ticks) {
+    if (!events || count <= 1) return;
+    qsort(events, (size_t)count, sizeof(SharedAsyncEvent),
+          use_ticks ? compare_events_by_ticks : compare_events_by_ms);
 }
 
 /* ============================================================================
@@ -903,9 +915,7 @@ int shared_async_play_ex(SharedAsyncSchedule* sched, SharedContext* ctx,
     slot->use_ticks = sched->use_ticks;
     slot->tempo = sched->initial_tempo > 0 ? sched->initial_tempo : SHARED_ASYNC_DEFAULT_TEMPO;
 
-    /* Sort by time using the comparator for this schedule's timing axis. */
-    qsort(slot->events, slot->event_count, sizeof(SharedAsyncEvent),
-          sched->use_ticks ? compare_events_by_ticks : compare_events_by_ms);
+    shared_async_sort_events(slot->events, slot->event_count, sched->use_ticks);
 
     /* Initialize state */
     slot->event_index = 0;

@@ -110,7 +110,9 @@ static int is_identifier_start(char c) {
 }
 
 static int is_identifier_char(char c) {
-    return isalnum((unsigned char)c) || c == '_' || c == '-';
+    /* '+' as in Alda's midi-bass+lead. Alda also allows ' ( ) in names, which
+     * here would swallow the s-expression after a name. */
+    return isalnum((unsigned char)c) || c == '_' || c == '-' || c == '+';
 }
 
 static int is_symbol_char(char c) {

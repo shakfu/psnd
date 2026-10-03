@@ -11,6 +11,7 @@
 #include <alda/context.h>
 #include <alda/interpreter.h>
 #include <alda/scheduler.h>
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
@@ -378,24 +379,24 @@ TEST(interpret_dynamics) {
     AldaContext ctx;
     test_context_init(&ctx);
 
-    /* ff (fortissimo) should give high velocity (88 per aldakit) */
+    /* ff (fortissimo): velocity 88, as Alda sends it */
     int result = alda_interpret_string(&ctx, "piano: (ff) c", "test");
     ASSERT_EQ(result, 0);
 
     AldaScheduledEvent* note = find_event(&ctx, ALDA_EVT_NOTE_ON, 0);
     ASSERT_NOT_NULL(note);
-    ASSERT_EQ(note->data2, 88);  /* ff = 88 velocity per aldakit */
+    ASSERT_EQ(note->data2, 88);
 
     alda_context_cleanup(&ctx);
 
-    /* pp (pianissimo) should give low velocity (39 per aldakit) */
+    /* pp (pianissimo): Alda's 0.31314 * 127 rounds to 40 (client/model/attributes.go) */
     test_context_init(&ctx);
     result = alda_interpret_string(&ctx, "piano: (pp) c", "test");
     ASSERT_EQ(result, 0);
 
     note = find_event(&ctx, ALDA_EVT_NOTE_ON, 0);
     ASSERT_NOT_NULL(note);
-    ASSERT_EQ(note->data2, 39);  /* pp = 39 velocity per aldakit */
+    ASSERT_EQ(note->data2, 40);
 
     alda_context_cleanup(&ctx);
 }
@@ -1131,6 +1132,313 @@ TEST(interp_group_cram_keeps_own_octave) {
     alda_context_cleanup(&ctx);
 }
 
+/* ============================================================================
+ * Conformance with Alda (docs/dev/conformance.md)
+ *
+ * Expected values are what `alda export` 2.4.7 produces for the same score,
+ * at 480 ticks per quarter note and 120 BPM unless stated.
+ * ============================================================================ */
+
+/* Tick of the nth note-on of a pitch, or -1 */
+static int note_on_tick(AldaContext* ctx, int pitch, int skip) {
+    for (int i = 0; i < ctx->event_count; i++) {
+        AldaScheduledEvent* e = &ctx->events[i];
+        if (e->type == ALDA_EVT_NOTE_ON && e->data1 == pitch && skip-- == 0) {
+            return e->tick;
+        }
+    }
+    return -1;
+}
+
+/* Sounding length in ticks of the nth note of a pitch, or -1 */
+static int note_length(AldaContext* ctx, int pitch, int skip) {
+    for (int i = 0; i < ctx->event_count; i++) {
+        AldaScheduledEvent* on = &ctx->events[i];
+        if (on->type != ALDA_EVT_NOTE_ON || on->data1 != pitch || skip-- != 0) continue;
+        for (int j = i + 1; j < ctx->event_count; j++) {
+            AldaScheduledEvent* off = &ctx->events[j];
+            if (off->type == ALDA_EVT_NOTE_OFF && off->data1 == pitch &&
+                off->channel == on->channel) {
+                return off->tick - on->tick;
+            }
+        }
+    }
+    return -1;
+}
+
+/* Program, or controller value, in effect on a channel at a tick; -1 if none.
+ * Events are sorted, and settings precede note-ons at the same tick. */
+static int setting_at(AldaContext* ctx, int channel, AldaEventType type,
+                      int control, int tick) {
+    int value = -1;
+    for (int i = 0; i < ctx->event_count; i++) {
+        AldaScheduledEvent* e = &ctx->events[i];
+        if (e->tick > tick) break;
+        if (e->type != type || e->channel != channel) continue;
+        if (type == ALDA_EVT_CC && e->data1 != control) continue;
+        value = (type == ALDA_EVT_CC) ? e->data2 : e->data1;
+    }
+    return value;
+}
+
+static AldaContext* conformance_run(const char* source) {
+    AldaContext* ctx = malloc(sizeof(AldaContext));
+    test_context_init(ctx);
+    if (alda_interpret_string(ctx, source, "test") != 0) {
+        alda_context_cleanup(ctx);
+        free(ctx);
+        return NULL;
+    }
+    return ctx;
+}
+
+static void conformance_free(AldaContext* ctx) {
+    alda_context_cleanup(ctx);
+    free(ctx);
+}
+
+/* P1: each part keeps its own tempo; the tempo map is the first part's */
+TEST(conf_parts_keep_their_own_tempo) {
+    AldaContext* ctx = conformance_run("violin: (tempo 100) c d\nviola: (tempo 200) c d");
+    ASSERT_NOT_NULL(ctx);
+    ASSERT_EQ(count_events(ctx, ALDA_EVT_TEMPO), 1);
+    ASSERT_EQ(find_event(ctx, ALDA_EVT_TEMPO, 0)->data1, 100);
+    /* At 100 BPM a tick is 1/800 s: viola's d at 0.3s, violin's at 0.6s */
+    ASSERT_EQ(note_on_tick(ctx, 62, 0), 240);
+    ASSERT_EQ(note_on_tick(ctx, 62, 1), 480);
+    conformance_free(ctx);
+}
+
+TEST(conf_global_tempo_wins_over_a_local_one) {
+    AldaContext* ctx = conformance_run("(tempo! 60) banjo: (tempo 180) c d");
+    ASSERT_NOT_NULL(ctx);
+    ASSERT_EQ(count_events(ctx, ALDA_EVT_TEMPO), 1);
+    ASSERT_EQ(find_event(ctx, ALDA_EVT_TEMPO, 0)->data1, 60);
+    /* The banjo still plays at 180: d after 1/3 s, 160 ticks at 60 BPM */
+    ASSERT_EQ(note_on_tick(ctx, 62, 0), 160);
+    conformance_free(ctx);
+}
+
+/* P2: chord notes keep their durations; the next event follows the shortest */
+TEST(conf_chord_follows_shortest_note) {
+    AldaContext* ctx = conformance_run("piano: c4./e4 g");
+    ASSERT_NOT_NULL(ctx);
+    ASSERT_EQ(note_length(ctx, 60, 0), 648);
+    ASSERT_EQ(note_length(ctx, 64, 0), 432);
+    ASSERT_EQ(note_on_tick(ctx, 67, 0), 480);
+    ASSERT_EQ(note_length(ctx, 67, 0), 432);
+    conformance_free(ctx);
+}
+
+TEST(conf_rest_in_chord_counts) {
+    AldaContext* ctx = conformance_run("piano: c1/e/g/r4 b");
+    ASSERT_NOT_NULL(ctx);
+    ASSERT_EQ(note_on_tick(ctx, 71, 0), 480);
+    conformance_free(ctx);
+}
+
+/* P3: voices start from a copy of the part and continue by number */
+TEST(conf_voices_do_not_share_octave) {
+    AldaContext* ctx = conformance_run("piano: V1: c > d V2: e f");
+    ASSERT_NOT_NULL(ctx);
+    ASSERT_EQ(note_on_tick(ctx, 64, 0), 0);
+    ASSERT_EQ(note_on_tick(ctx, 65, 0), 480);
+    ASSERT_EQ(note_on_tick(ctx, 74, 0), 480);
+    conformance_free(ctx);
+}
+
+TEST(conf_repeated_voice_continues) {
+    AldaContext* ctx = conformance_run("piano: V1: c1 V2: e2 V1: d1 V2: f2");
+    ASSERT_NOT_NULL(ctx);
+    ASSERT_EQ(note_on_tick(ctx, 62, 0), 1920);
+    ASSERT_EQ(note_on_tick(ctx, 65, 0), 960);
+    conformance_free(ctx);
+}
+
+TEST(conf_last_voice_to_finish_carries_on) {
+    AldaContext* ctx = conformance_run(
+        "piano: V1: c4 V2: (key-sig \"b-\") b2 V3: b4 V0: b");
+    ASSERT_NOT_NULL(ctx);
+    ASSERT_EQ(note_on_tick(ctx, 71, 0), 0);    /* V3 has no key signature */
+    ASSERT_EQ(note_on_tick(ctx, 70, 1), 960);  /* V2 finished last */
+    conformance_free(ctx);
+}
+
+/* P4: a rest sets the default duration */
+TEST(conf_rest_sets_default_duration) {
+    AldaContext* ctx = conformance_run("piano: r1 r c");
+    ASSERT_NOT_NULL(ctx);
+    ASSERT_EQ(note_on_tick(ctx, 60, 0), 3840);
+    conformance_free(ctx);
+}
+
+/* P5, P6: a cram weighs repeats and brackets, and does not drift */
+TEST(conf_cram_counts_repeats) {
+    AldaContext* ctx = conformance_run("piano: {c [d e]*2}2 f");
+    ASSERT_NOT_NULL(ctx);
+    ASSERT_EQ(note_on_tick(ctx, 62, 0), 192);
+    ASSERT_EQ(note_on_tick(ctx, 65, 0), 960);
+    conformance_free(ctx);
+}
+
+TEST(conf_cram_positions_are_exact) {
+    AldaContext* ctx = conformance_run("piano: {c c c}4 {c c c}4 {c c c}4 d");
+    ASSERT_NOT_NULL(ctx);
+    ASSERT_EQ(note_on_tick(ctx, 60, 4), 640);
+    ASSERT_EQ(note_on_tick(ctx, 62, 0), 1440);
+    conformance_free(ctx);
+}
+
+/* P7: a cram's duration becomes the default */
+TEST(conf_cram_duration_becomes_default) {
+    AldaContext* ctx = conformance_run("piano: c2 {d e}4 f");
+    ASSERT_NOT_NULL(ctx);
+    ASSERT_EQ(note_length(ctx, 65, 0), 432);
+    conformance_free(ctx);
+}
+
+/* P8: slurred notes in a cram sound their full length */
+TEST(conf_slur_in_cram_is_not_quantized) {
+    AldaContext* ctx = conformance_run("piano: {a-~ b~ a-}4");
+    ASSERT_NOT_NULL(ctx);
+    ASSERT_EQ(note_length(ctx, 71, 0), 160);
+    conformance_free(ctx);
+}
+
+/* P9: quant above 100 */
+TEST(conf_quant_above_100) {
+    AldaContext* ctx = conformance_run("piano: (quant 200) c8 d");
+    ASSERT_NOT_NULL(ctx);
+    ASSERT_EQ(note_length(ctx, 60, 0), 480);
+    conformance_free(ctx);
+}
+
+/* P10: every channel starts with pan 64 and track volume 100 */
+TEST(conf_channel_starts_with_pan_and_track_volume) {
+    AldaContext* ctx = conformance_run("piano: c");
+    ASSERT_NOT_NULL(ctx);
+    ASSERT_EQ(setting_at(ctx, 0, ALDA_EVT_PAN, 0, 0), 64);
+    ASSERT_EQ(setting_at(ctx, 0, ALDA_EVT_CC, 11, 0), 100);
+    conformance_free(ctx);
+}
+
+TEST(conf_track_volume_is_cc11) {
+    AldaContext* ctx = conformance_run("piano: c (track-volume 50) d");
+    ASSERT_NOT_NULL(ctx);
+    ASSERT_EQ(setting_at(ctx, 0, ALDA_EVT_CC, 11, 0), 100);
+    ASSERT_EQ(setting_at(ctx, 0, ALDA_EVT_CC, 11, 480), 64);
+    ASSERT_EQ(count_events(ctx, ALDA_EVT_CC), 2);
+    conformance_free(ctx);
+}
+
+/* P11: Alda's instrument names and aliases */
+TEST(conf_instrument_aliases) {
+    const char* scores[] = {"guitar: c", "vibes: c", "upright-bass: c", "midi-bass+lead: c"};
+    const int programs[] = {24, 11, 32, 87};
+    for (int i = 0; i < 4; i++) {
+        AldaContext* ctx = conformance_run(scores[i]);
+        ASSERT_NOT_NULL(ctx);
+        ASSERT_EQ(find_event(ctx, ALDA_EVT_PROGRAM, 0)->data1, programs[i]);
+        conformance_free(ctx);
+    }
+}
+
+/* P12: Alda rounds half away from zero */
+TEST(conf_rounding) {
+    AldaContext* ctx = conformance_run("piano: (pan 50) (vol 50) c");
+    ASSERT_NOT_NULL(ctx);
+    ASSERT_EQ(setting_at(ctx, 0, ALDA_EVT_PAN, 0, 0), 64);
+    ASSERT_EQ(find_event(ctx, ALDA_EVT_NOTE_ON, 0)->data2, 64);
+    conformance_free(ctx);
+}
+
+/* P13: beyond 15 parts, channels pass between parts and each note keeps its
+ * instrument */
+TEST(conf_channels_are_reused_over_time) {
+    static const char* names[] = {
+        "piano", "violin", "viola", "cello", "flute", "oboe", "clarinet",
+        "bassoon", "trumpet", "trombone", "tuba", "harp", "celesta",
+        "marimba", "vibraphone", "xylophone", "glockenspiel", "organ"
+    };
+    static const int programs[] = {0, 40, 41, 42, 73, 68, 71, 70, 56, 57, 58,
+                                   46, 8, 12, 11, 13, 9, 19};
+    char source[2048] = "";
+    for (int i = 0; i < 18; i++) {
+        char line[128];
+        snprintf(line, sizeof(line), "%s: (set-note-length 1)", names[i]);
+        strcat(source, line);
+        for (int r = 0; r < i; r++) strcat(source, " r");
+        strcat(source, " c\n");
+    }
+    AldaContext* ctx = conformance_run(source);
+    ASSERT_NOT_NULL(ctx);
+    for (int i = 0; i < 18; i++) {
+        int tick = 1920 * i;
+        int channel = -1;
+        for (int e = 0; e < ctx->event_count; e++) {
+            if (ctx->events[e].type == ALDA_EVT_NOTE_ON && ctx->events[e].tick == tick) {
+                channel = ctx->events[e].channel;
+            }
+        }
+        ASSERT_NEQ(channel, -1);
+        ASSERT_EQ(setting_at(ctx, channel, ALDA_EVT_PROGRAM, 0, tick), programs[i]);
+    }
+    conformance_free(ctx);
+}
+
+/* P14: parts pinned to one channel each get their own instrument */
+TEST(conf_midi_channel_shared_by_two_parts) {
+    AldaContext* ctx = conformance_run(
+        "piano: (midi-channel 2) c8 d\nguitar: (midi-channel 2) r4 e");
+    ASSERT_NOT_NULL(ctx);
+    ASSERT_EQ(find_event(ctx, ALDA_EVT_NOTE_ON, 0)->channel, 2);
+    ASSERT_EQ(setting_at(ctx, 2, ALDA_EVT_PROGRAM, 0, note_on_tick(ctx, 62, 0)), 0);
+    ASSERT_EQ(setting_at(ctx, 2, ALDA_EVT_PROGRAM, 0, note_on_tick(ctx, 64, 0)), 24);
+    conformance_free(ctx);
+}
+
+/* After a voice group, a note still sounding keeps sounding when the part
+ * plays its pitch again: the part moves to a channel of its own, as in Alda */
+TEST(conf_note_outlasting_a_voice_group_is_not_cut) {
+    AldaContext* ctx = conformance_run("piano: (quant 200) V1: c2 V2: e2 V0: d4 c4");
+    ASSERT_NOT_NULL(ctx);
+    int first = find_note_on(ctx, 60)->channel;
+    AldaScheduledEvent* second = NULL;
+    for (int i = 0; i < ctx->event_count; i++) {
+        AldaScheduledEvent* e = &ctx->events[i];
+        if (e->type == ALDA_EVT_NOTE_ON && e->data1 == 60 && e->tick == 1440) second = e;
+    }
+    ASSERT_NOT_NULL(second);
+    ASSERT_NEQ(second->channel, first);
+    ASSERT_EQ(note_length(ctx, 60, 0), 1920);  /* The first c sounds its full 2s */
+    ASSERT_EQ(setting_at(ctx, second->channel, ALDA_EVT_PROGRAM, 0, 1440), 0);
+    conformance_free(ctx);
+}
+
+/* Without such an overlap the part keeps its channel, and a unison inside a
+ * group stays on one channel, as in Alda */
+TEST(conf_part_keeps_channel_after_voices_when_it_can) {
+    const char* scores[] = {"piano: V1: c2 V2: e2 V0: c4",
+                            "piano: (quant 200) V1: c2 V2: c2 V0: d4"};
+    for (int s = 0; s < 2; s++) {
+        AldaContext* ctx = conformance_run(scores[s]);
+        ASSERT_NOT_NULL(ctx);
+        for (int i = 0; i < ctx->event_count; i++) {
+            if (ctx->events[i].type == ALDA_EVT_NOTE_ON) ASSERT_EQ(ctx->events[i].channel, 0);
+        }
+        conformance_free(ctx);
+    }
+}
+
+/* P15: no program change on the drum channel */
+TEST(conf_no_program_change_for_percussion) {
+    AldaContext* ctx = conformance_run("midi-percussion: c d");
+    ASSERT_NOT_NULL(ctx);
+    ASSERT_EQ(count_events(ctx, ALDA_EVT_PROGRAM), 0);
+    ASSERT_EQ(find_event(ctx, ALDA_EVT_NOTE_ON, 0)->channel, 9);
+    conformance_free(ctx);
+}
+
 BEGIN_TEST_SUITE("Alda Interpreter")
     /* Basic notes */
     RUN_TEST(interpret_single_note);
@@ -1227,4 +1535,26 @@ BEGIN_TEST_SUITE("Alda Interpreter")
     RUN_TEST(interp_group_members_keep_own_octave);
     RUN_TEST(interp_group_chord_keeps_own_octave);
     RUN_TEST(interp_group_cram_keeps_own_octave);
+    RUN_TEST(conf_parts_keep_their_own_tempo);
+    RUN_TEST(conf_global_tempo_wins_over_a_local_one);
+    RUN_TEST(conf_chord_follows_shortest_note);
+    RUN_TEST(conf_rest_in_chord_counts);
+    RUN_TEST(conf_voices_do_not_share_octave);
+    RUN_TEST(conf_repeated_voice_continues);
+    RUN_TEST(conf_last_voice_to_finish_carries_on);
+    RUN_TEST(conf_rest_sets_default_duration);
+    RUN_TEST(conf_cram_counts_repeats);
+    RUN_TEST(conf_cram_positions_are_exact);
+    RUN_TEST(conf_cram_duration_becomes_default);
+    RUN_TEST(conf_slur_in_cram_is_not_quantized);
+    RUN_TEST(conf_quant_above_100);
+    RUN_TEST(conf_channel_starts_with_pan_and_track_volume);
+    RUN_TEST(conf_track_volume_is_cc11);
+    RUN_TEST(conf_instrument_aliases);
+    RUN_TEST(conf_rounding);
+    RUN_TEST(conf_channels_are_reused_over_time);
+    RUN_TEST(conf_midi_channel_shared_by_two_parts);
+    RUN_TEST(conf_no_program_change_for_percussion);
+    RUN_TEST(conf_note_outlasting_a_voice_group_is_not_cut);
+    RUN_TEST(conf_part_keeps_channel_after_voices_when_it_can);
 END_TEST_SUITE()

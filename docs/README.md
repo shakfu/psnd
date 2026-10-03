@@ -4,8 +4,7 @@ This directory contains documentation for psnd, a polyglot editor and REPL for m
 
 ## Language Guides
 
-psnd supports five music programming languages, each with its own paradigm.
-Each language's guide lives beside its source:
+psnd supports five music programming languages, each with its own paradigm. Each language's guide lives beside its source:
 
 | Language | Paradigm | Guide |
 |----------|----------|-------|

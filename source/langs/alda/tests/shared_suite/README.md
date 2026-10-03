@@ -4,9 +4,14 @@ This directory contains a language-agnostic test suite for validating Alda imple
 Each test file is a standalone `.alda` file with a corresponding `.expected` file
 describing the expected MIDI output.
 
+The `.expected` files record what Alda itself produces. aldakit's
+`scripts/gen_shared_suite.py` writes them from `alda export` output (Alda
+2.4.7, committed in aldakit's `tests/alda_reference/`). Do not edit them by
+hand; change the `.alda` file and regenerate.
+
 ## Structure
 
-```text
+```
 shared_suite/
   README.md              # This file
   01_notes_basic.alda    # Basic note tests
@@ -19,7 +24,6 @@ shared_suite/
 ## Test Format
 
 Each `.alda` file contains:
-
 1. A comment header describing what is being tested
 2. Simple, isolated test cases
 3. Comments indicating expected behavior
@@ -28,7 +32,7 @@ Each `.alda` file contains:
 
 The `.expected` files use a simple line-based format that's easy to parse in any language:
 
-```text
+```
 # Comments start with #
 # Format: TYPE field1 field2 ...
 
@@ -39,14 +43,15 @@ NOTE pitch start duration velocity channel
 ```
 
 Example:
-
-```text
+```
 # Expected output for 01_notes_basic.alda
 PROGRAM 0 0 0.0000
 TEMPO 120.0 0.0000
-NOTE 60 0.0000 0.4500 80 0
-NOTE 62 0.5000 0.4500 80 0
-NOTE 64 1.0000 0.4500 80 0
+CC 10 64 0 0.0000
+CC 11 100 0 0.0000
+NOTE 60 0.0000 0.4492 69 0
+NOTE 62 0.5000 0.4492 69 0
+NOTE 64 1.0000 0.4492 69 0
 ```
 
 ### Record Types
@@ -63,10 +68,25 @@ All times are in seconds. Pitch is MIDI note number (0-127).
 ## MIDI Conventions
 
 - **Tempo**: Default 120 BPM unless specified
-- **Velocity**: Default 80 (mf) unless dynamics specified
-- **Channel**: 0-15, assigned per part (channel 9 reserved for percussion)
+- **Velocity**: Default 69 (mf: volume 54) unless dynamics specified
+- **Channel**: 0-15 as Alda assigns them (channel 9 reserved for percussion)
 - **Timing**: All times in seconds at specified tempo
 - **Duration**: Note duration in seconds (affected by quantization, default 90%)
+- **Controllers**: CC 10 (pan) and CC 11 (track volume) are sent with the
+  first note on a channel and whenever a later note needs a different value;
+  a program change likewise
+
+## Comparing Against the Files
+
+- **Tolerance**: times and durations come from a 128 ticks-per-beat MIDI
+  file, so they are within one tick of Alda's values. Compare with a
+  tolerance; 10ms covers every file.
+- **Channels**: an implementation may number channels differently from Alda,
+  provided each note plays with the same program and controller values.
+- **Silent notes**: a note at volume 0 is absent. MIDI encodes it as a
+  note-on with velocity 0, which every reader takes as a note-off, so it
+  cannot appear in a file derived from MIDI. Compare only notes with velocity
+  above 0.
 
 ## Pitch Reference
 
@@ -129,7 +149,6 @@ for line in open("01_notes_basic.expected"):
 ## Test Categories
 
 ### 1. Notes (01-03)
-
 - Basic pitches (c, d, e, f, g, a, b)
 - Accidentals (+, -, _, ++, --)
 - Durations (1, 2, 4, 8, 16, 32)
@@ -137,100 +156,83 @@ for line in open("01_notes_basic.expected"):
 - Millisecond/second durations (500ms, 2s)
 
 ### 2. Octaves (04)
-
 - Octave set (o0 through o9)
 - Octave up (>)
 - Octave down (<)
 - Default octave (o4)
 
 ### 3. Rests (05)
-
 - Basic rests with durations
 - Rests don't produce MIDI notes
 
 ### 4. Chords (06)
-
 - Simultaneous notes (c/e/g)
 - Chord with duration (c1/e/g)
 - Chord with octave changes (c/e/g/>c)
 
 ### 5. Ties (07)
-
 - Duration ties (c1~1 = 2 whole notes duration)
 - Note ties/slurs (c~d~e)
 
 ### 6. Tempo (08)
-
 - Tempo attribute (tempo 120)
 - Global tempo (tempo! 120)
 - Tempo changes mid-score
 
 ### 7. Volume (09)
-
 - Volume attribute (vol 80)
 - Volume changes
 
 ### 8. Dynamics (10)
-
 - pp, p, mp, mf, f, ff
 - ppp, fff (extended)
 
 ### 9. Parts (11)
-
 - Single instrument (piano:)
 - Part alias (piano "p1":)
 - Multiple instruments (violin/viola:)
 - Channel assignment
 
 ### 10. Variables (12)
-
 - Definition (theme = c d e)
 - Reference (piano: theme)
 - No sound on definition
 
 ### 11. Markers (13)
-
 - Marker definition (%verse)
 - Marker jump (@verse)
 - Multi-part synchronization
 
 ### 12. Voices (14)
-
 - Voice declaration (V1:, V2:)
 - Voice merge (V0:)
 - Parallel voices
 
 ### 13. Repeats (15)
-
 - Simple repeat (c*4)
 - Bracketed repeat ([c d e]*2)
 - On-repetitions ([c d'1 e'2]*2)
 
 ### 14. Cram/Tuplets (16)
-
 - Triplets ({c d e}4)
 - Quintuplets ({c d e f g}2)
 - Nested cram
 
 ### 15. Key Signature (17)
-
 - Major keys (key-sig '(c major))
 - Minor keys (key-sig '(a minor))
 - Accidental override with natural (_)
 
 ### 16. Transposition (18)
-
 - Transpose up (transpose 5)
 - Transpose down (transpose -7)
 - Transpose reset (transpose 0)
 
 ### 17. Quantization (19)
-
 - Quantization/legato (quant 90)
 - Staccato (quant 50)
 
 ### 18. Panning (20)
-
 - Pan left (panning 0)
 - Pan center (panning 50)
 - Pan right (panning 100)

@@ -83,8 +83,17 @@ int loki_midi_export_shared(const char *filename) {
         }
     }
 
-    /* Always add default tempo to ensure track 0 has content */
-    midifile.addTempo(0, 0, 120.0);
+    /* A default tempo, so track 0 has content, unless the events set one at
+     * tick 0: two tempos at one tick leave the file's tempo to the sort. */
+    bool has_initial_tempo = false;
+    for (int i = 0; i < event_count; i++) {
+        if (events[i].type == SHARED_MIDI_TEMPO && events[i].tick == 0) {
+            has_initial_tempo = true;
+        }
+    }
+    if (!has_initial_tempo) {
+        midifile.addTempo(0, 0, 120.0);
+    }
 
     /* Convert events */
     for (int i = 0; i < event_count; i++) {
@@ -122,7 +131,12 @@ int loki_midi_export_shared(const char *filename) {
         }
     }
 
-    /* Sort tracks (ensures events are in correct order) */
+    /* Keep the buffer's order within a tick (shared_midi_events_sort puts
+     * note-offs before note-ons). Without sequence numbers midifile's sort
+     * puts note-ons first, so a note ending where the same pitch starts again
+     * would end the new note instead. Its sortTracksNoteOffsBeforeOns() uses
+     * the note-ons-first comparator too (MidiEventList.cpp). */
+    midifile.markSequence();
     midifile.sortTracks();
 
     /* Write the file */

@@ -16,8 +16,9 @@
 (note_letter) @constant
 (pitch) @constant
 
-; Accidentals
+; Accidentals and slurs
 (accidental) @operator
+(slur) @operator
 
 ; Rests
 (rest) @constant.builtin
@@ -51,6 +52,7 @@
 (sexp ["(" ")"] @punctuation.bracket)
 (sexp_symbol) @function.builtin
 (quoted_list) @constant
+(quoted_symbol) @constant
 
 ; Operators and delimiters
 (barline) @punctuation.delimiter

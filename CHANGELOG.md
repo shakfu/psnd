@@ -22,7 +22,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+Alda output now matches Alda 2.4.7 for all 60 example and shared-suite scores, checked by two CTest tests against `alda export` output (`docs/dev/conformance.md`). Before, none matched. **Most scores sound different**: every channel now starts at Alda's pan and track volume, and chords, voices, crams, per-part tempos and instrument names change notes in many examples.
+
 ### Added
+
+- **Alda conformance tests**: `alda_conformance_examples` compares every example with Alda's output (`tests/alda_reference/`), and `alda_midi_test_suite` the shared suite, whose `.expected` files are now generated from Alda's exports. The runner compares each note's program and controllers as well as its timing, and reports every difference.
+
+- **`(track-volume N)` and `(midi-channel N)`**: track volume is sent as CC 11, as Alda does; `midi-channel` pins a part to a channel, and parts sharing one each get their own program.
 
 - **Experimental Native Webview Build**: `make native` builds the `--native` host (`-DBUILD_WEBVIEW_HOST=ON`), now a declared CMake option. Linux requires `libwebkit2gtk-4.1-dev`; the build previously asked for `webkit2gtk-4.0`, which current distributions no longer ship. The nightly build matrix builds and tests it on Linux and macOS; Windows is excluded until the WebView2 SDK is available to the build.
 
@@ -32,9 +38,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Changed
 
+- **Alda parts are placed in seconds, and ticks are computed once the score is complete.** A part's own `(tempo N)` used to change the tempo of every part, because all parts shared one tick timeline. The MIDI tempo map now follows Alda: the first part's tempo changes, overridden by `(tempo! N)`.
+
+- **Alda channel settings are sent with the notes that need them.** Each note's channel gets its program, pan (CC 10) and track volume (CC 11) when they differ from what the channel holds, so a channel never keeps a previous part's settings. With more than 15 parts, a channel passes to another part once its part stops sounding; before, channels wrapped and later parts replaced earlier parts' instruments.
+
+- **Alda rounding**: volume, pan and track volume round half away from zero (pan 50 is 64, not 63), and dynamics use Alda's velocities (`pp` is 40, `p` 49, `mp` 59, `ppppp` 11).
+
 - **xterm.js Vendored And Always Embedded**: xterm.js 5.3.0 and xterm-addon-fit 0.8.0 are vendored unmodified from npm under `source/thirdparty/`, and `scripts/cmake/psnd_xterm.cmake` generates `host_web_xterm.h` from them at configure time. Nothing defined `LOKI_EMBED_XTERM`, so both web hosts loaded xterm from jsDelivr, and the checked-in header did not match any upstream file. The header holds byte arrays, not string literals, because MSVC rejects literals over 64KB (C1091).
 
 ### Fixed
+
+- **Alda chords, voices, rests and crams.** A chord gave every note its longest duration and advanced by it; it now keeps each note's duration and advances by the shortest note or rest. Voices shared one part state, so an octave or key signature set in one leaked into the next; each voice now starts from a copy, and the voice that finishes last continues the part. A rest did not set the default duration. A cram ignored repeats and brackets inside it, rounded each note to ticks so positions drifted, quantized slurred notes, and did not pass its duration on as the default. `(quant N)` above 100 was ignored.
+
+- **A note still sounding after a voice group could be cut off.** With `quant` above 100 a note from inside a voice group can outlast the group; when the part then played the same pitch, the new note-on on the same channel ended it. Alda sounds both, because it moves the part to a new channel after every voice group. psnd now moves the part only when such an overlap occurs.
+
+- **The Alda tree-sitter grammar failed on 56 of 60 shipped scores**, degrading highlighting. Any name pattern matched `c4`, `o4` and `V1`, so most notes and octave changes lexed as names; there were no variable references or slurs, chord notes could not carry their own durations, and newlines ended parts, brackets and s-expressions. The grammar now follows Alda's scanner, and `test_treesitter_alda` parses every score and compiles the editor's highlight query against it. `+` is allowed in names, as in the interpreter.
+
+- **Alda instrument names**: 112 of Alda's 276 names and aliases, such as `guitar`, `vibes` and the saxophones, played as piano. The table is now generated from Alda's list (`scripts/gen_alda_instruments.py`), and `+` is allowed in names (`midi-bass+lead`).
+
+- **A note ending where the same pitch starts again was cut short.** In exported MIDI files the new note ended at once: the shared event buffer sorted by tick alone with an unstable sort, and midifile's sort puts note-ons first. In async playback a note could also precede its own program change. Both now order each tick as note-offs, settings, note-ons.
+
+- **Exported MIDI files had several tempo events at tick 0**, so the file's tempo depended on sort order. The starting tempo is now written once.
 
 - **`--web` And `--native` Ignored `-sf`, `-cs`, `--plugin` And OSC Options**: both hosts copied only display options into `EditorConfig`, so they ran without the requested backend, plugin or OSC server. `--plugin` in a build without minihost now reports that in the status bar instead of being silently ignored. They were also recognized only as the first argument, so `psnd -sf gm.sf2 --native song.alda` failed with `Unknown option: --native`.
 

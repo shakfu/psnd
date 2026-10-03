@@ -15,6 +15,7 @@ set(ALDA_IMPL_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/impl/context.c
     ${CMAKE_CURRENT_SOURCE_DIR}/impl/instruments.c
     ${CMAKE_CURRENT_SOURCE_DIR}/impl/interpreter.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/impl/finalize.c
     ${CMAKE_CURRENT_SOURCE_DIR}/impl/attributes.c
     ${CMAKE_CURRENT_SOURCE_DIR}/impl/scala.c
 )

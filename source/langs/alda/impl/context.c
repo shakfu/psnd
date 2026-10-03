@@ -6,6 +6,7 @@
 #include "alda/context.h"
 #include "alda/instruments.h"
 #include "context.h"  /* SharedContext */
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -43,6 +44,7 @@ void alda_context_init(AldaContext* ctx) {
     ctx->global_volume = ALDA_DEFAULT_VOLUME;
     ctx->global_quant = ALDA_DEFAULT_QUANT;
     ctx->global_pan = ALDA_DEFAULT_PAN;
+    ctx->global_track_volume = ALDA_DEFAULT_TRACK_VOLUME;
 
     /* Markers (deferred) */
     ctx->marker_count = 0;
@@ -54,6 +56,17 @@ void alda_context_init(AldaContext* ctx) {
     ctx->events = NULL;
     ctx->event_count = 0;
     ctx->event_capacity = 0;
+
+    ctx->notes = NULL;
+    ctx->note_count = 0;
+    ctx->note_capacity = 0;
+    ctx->tempo_changes = NULL;
+    ctx->tempo_change_count = 0;
+    ctx->tempo_change_capacity = 0;
+    ctx->voice_group_ends = NULL;
+    ctx->voice_group_end_count = 0;
+    ctx->voice_group_end_capacity = 0;
+    ctx->base_tempo = ALDA_DEFAULT_TEMPO;
 
     for (int i = 0; i < 7; i++) {
         ctx->global_key_signature[i] = 0;
@@ -83,6 +96,19 @@ void alda_context_cleanup(AldaContext* ctx) {
     ctx->event_count = 0;
     ctx->event_capacity = 0;
 
+    free(ctx->notes);
+    ctx->notes = NULL;
+    ctx->note_count = 0;
+    ctx->note_capacity = 0;
+    free(ctx->tempo_changes);
+    ctx->tempo_changes = NULL;
+    ctx->tempo_change_count = 0;
+    ctx->tempo_change_capacity = 0;
+    free(ctx->voice_group_ends);
+    ctx->voice_group_ends = NULL;
+    ctx->voice_group_end_count = 0;
+    ctx->voice_group_end_capacity = 0;
+
     /* SharedContext is NOT cleaned up here - caller owns it.
      * Editor mode: editor cleans up ctx->model.shared.
      * REPL mode: REPL cleans up its own SharedContext.
@@ -98,10 +124,8 @@ void alda_context_reset(AldaContext* ctx) {
     /* Reset parts but keep them defined */
     for (int i = 0; i < ctx->part_count; i++) {
         AldaPartState* part = &ctx->parts[i];
-        part->current_tick = 0;
-        part->voice_count = 0;
-        part->current_voice = -1;
-        part->in_voice_group = 0;
+        part->current_time = 0.0;
+        part->time_scale = 1.0;
     }
 
     /* Clear current part selection */
@@ -112,6 +136,9 @@ void alda_context_reset(AldaContext* ctx) {
 
     /* Clear events */
     ctx->event_count = 0;
+    ctx->note_count = 0;
+    ctx->tempo_change_count = 0;
+    ctx->voice_group_end_count = 0;
 
     /* Clear markers and variables */
     ctx->marker_count = 0;
@@ -134,26 +161,25 @@ void alda_part_init(AldaPartState* part, const char* name, int channel, int prog
 
     part->program = program;
     part->channel = channel;
+    part->percussion = 0;
+    part->pinned_channel = -1;
 
     /* Musical state defaults */
     part->octave = ALDA_DEFAULT_OCTAVE;
     part->volume = -1;  /* -1 = use global */
-    part->velocity_override = 69;  /* Default mf velocity (matches aldakit) */
+    part->velocity_override = 69;  /* mf: Alda's volume 54 as velocity */
     part->tempo = 0;   /* 0 = use global */
-    part->quant = 0;   /* 0 = use global */
+    part->quant = -1;  /* -1 = use global; 0 is a valid quantization */
     part->pan = ALDA_DEFAULT_PAN;
+    part->track_volume = ALDA_DEFAULT_TRACK_VOLUME;
 
-    /* Duration defaults */
-    part->default_duration = ALDA_DEFAULT_DURATION;
-    part->default_dots = 0;
+    /* Duration defaults: a quarter note */
+    part->default_beats = 4.0 / ALDA_DEFAULT_DURATION;
+    part->default_ms = 0.0;
 
     /* Timing */
-    part->current_tick = 0;
-
-    /* Voices */
-    part->voice_count = 0;
-    part->current_voice = -1;  /* Merged mode */
-    part->in_voice_group = 0;
+    part->current_time = 0.0;
+    part->time_scale = 1.0;
 
     /* Key signature (all natural) */
     for (int i = 0; i < 7; i++) {
@@ -258,6 +284,9 @@ AldaPartState* alda_get_or_create_part(AldaContext* ctx, const char* name) {
     /* Create new part */
     AldaPartState* part = &ctx->parts[ctx->part_count];
     alda_part_init(part, name, channel, program);
+    part->percussion = is_percussion;
+    part->pan = ctx->global_pan;
+    part->track_volume = ctx->global_track_volume;
 
     /* A part declared after (key-sig! ...) still inherits it. */
     if (ctx->has_global_key_signature) {
@@ -318,6 +347,9 @@ static AldaPartState* alda_create_new_part(AldaContext* ctx, const char* name) {
     /* Create new part */
     AldaPartState* part = &ctx->parts[ctx->part_count];
     alda_part_init(part, name, channel, program);
+    part->percussion = is_percussion;
+    part->pan = ctx->global_pan;
+    part->track_volume = ctx->global_track_volume;
 
     /* A part declared after (key-sig! ...) still inherits it. */
     if (ctx->has_global_key_signature) {
@@ -453,7 +485,7 @@ int alda_effective_velocity(AldaContext* ctx, AldaPartState* part) {
         return part->velocity_override;
     }
 
-    int volume = ALDA_DEFAULT_VOLUME;
+    double volume = ALDA_DEFAULT_VOLUME;
 
     if (part && part->volume >= 0) {
         volume = part->volume;
@@ -461,15 +493,20 @@ int alda_effective_velocity(AldaContext* ctx, AldaPartState* part) {
         volume = ctx->global_volume;
     }
 
-    /* Map 0-100 to 0-127 (truncation matches aldakit) */
-    int velocity = (volume * 127) / 100;
-    if (velocity < 0) velocity = 0;
-    if (velocity > 127) velocity = 127;
-    return velocity;
+    return alda_percent_to_midi(volume);
+}
+
+int alda_percent_to_midi(double percent) {
+    /* As Alda: scale to a fraction, multiply by 127 and round half away from
+     * zero, so 50 is 64. Truncating gives 63. */
+    double scaled = floor(percent / 100.0 * 127.0 + 0.5);
+    if (scaled < 0) scaled = 0;
+    if (scaled > 127) scaled = 127;
+    return (int)scaled;
 }
 
 int alda_effective_quant(AldaContext* ctx, AldaPartState* part) {
-    if (part && part->quant > 0) {
+    if (part && part->quant >= 0) {
         return part->quant;
     }
     if (ctx) {

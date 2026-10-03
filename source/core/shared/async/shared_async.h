@@ -243,6 +243,18 @@ void shared_async_schedule_note_off_tick_ex(SharedAsyncSchedule* sched, int tick
 int shared_async_ticks_to_ms(int ticks, int tempo);
 
 /**
+ * @brief Sort events into playing order.
+ *
+ * By time, then within one time: note-offs, then program, controller and
+ * tempo changes, then note-ons.
+ *
+ * @param events Events to sort in place.
+ * @param count Number of events.
+ * @param use_ticks Non-zero to sort by tick, zero by milliseconds.
+ */
+void shared_async_sort_events(SharedAsyncEvent* events, int count, int use_ticks);
+
+/**
  * Set launch quantization for beat-aligned start.
  * When Link is enabled, playback will wait until the next beat boundary.
  *

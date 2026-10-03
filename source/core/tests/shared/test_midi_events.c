@@ -321,9 +321,7 @@ TEST(midi_events_sort_by_tick) {
     shared_midi_events_cleanup();
 }
 
-/* Note: qsort is not guaranteed to be stable across platforms.
- * This test is skipped on Windows where qsort behavior differs. */
-#ifndef _WIN32
+/* Within a tick the order is explicit, not left to qsort's stability */
 TEST(midi_events_sort_stable) {
     int result = shared_midi_events_init(480);
     ASSERT_EQ(result, 0);
@@ -344,7 +342,25 @@ TEST(midi_events_sort_stable) {
 
     shared_midi_events_cleanup();
 }
-#endif
+
+/* A note ending where the same pitch starts again must end first */
+TEST(midi_events_sort_note_off_before_note_on) {
+    ASSERT_EQ(shared_midi_events_init(480), 0);
+
+    shared_midi_events_note_on(480, 0, 60, 100);
+    shared_midi_events_cc(480, 0, 11, 100);
+    shared_midi_events_note_off(480, 0, 60);
+    shared_midi_events_sort();
+
+    int count = 0;
+    const SharedMidiEvent *events = shared_midi_events_get(&count);
+    ASSERT_EQ(count, 3);
+    ASSERT_EQ(events[0].type, SHARED_MIDI_NOTE_OFF);
+    ASSERT_EQ(events[1].type, SHARED_MIDI_CC);
+    ASSERT_EQ(events[2].type, SHARED_MIDI_NOTE_ON);
+
+    shared_midi_events_cleanup();
+}
 
 /* ============================================================================
  * Capacity Tests
@@ -397,9 +413,8 @@ BEGIN_TEST_SUITE("Shared MIDI Events Tests")
 
     /* Sorting */
     RUN_TEST(midi_events_sort_by_tick);
-#ifndef _WIN32
     RUN_TEST(midi_events_sort_stable);
-#endif
+    RUN_TEST(midi_events_sort_note_off_before_note_on);
 
     /* Capacity */
     RUN_TEST(midi_events_many_events);

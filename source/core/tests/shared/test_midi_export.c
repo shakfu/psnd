@@ -162,6 +162,46 @@ TEST(export_single_note) {
     shared_midi_events_cleanup();
 }
 
+/* Index of a two-byte MIDI message in a file's bytes, from `from`; -1 if absent */
+static long find_message(const unsigned char *data, long size, long from,
+                         unsigned char status, unsigned char key) {
+    for (long i = from; i + 1 < size; i++) {
+        if (data[i] == status && data[i + 1] == key) return i;
+    }
+    return -1;
+}
+
+/* A note ending where the same pitch starts again must end first in the file,
+ * or a reader ends the new note instead */
+TEST(export_note_off_before_note_on_at_same_tick) {
+    ASSERT_EQ(shared_midi_events_init(480), 0);
+    shared_midi_events_note_on(0, 0, 60, 100);
+    shared_midi_events_note_on(480, 0, 60, 100);
+    shared_midi_events_note_off(480, 0, 60);
+    shared_midi_events_note_off(960, 0, 60);
+    shared_midi_events_sort();
+
+    char path[256];
+    build_test_path(path, sizeof(path), "same_tick");
+    delete_test_file(path);
+    ASSERT_EQ(loki_midi_export_shared(path), 0);
+
+    unsigned char data[1024];
+    FILE *f = fopen(path, "rb");
+    ASSERT_NOT_NULL(f);
+    long size = (long)fread(data, 1, sizeof(data), f);
+    fclose(f);
+
+    long first_on = find_message(data, size, 0, 0x90, 60);
+    long second_on = find_message(data, size, first_on + 2, 0x90, 60);
+    long first_off = find_message(data, size, 0, 0x80, 60);
+    ASSERT_TRUE(first_on >= 0 && second_on >= 0 && first_off >= 0);
+    ASSERT_LT(first_off, second_on);
+
+    delete_test_file(path);
+    shared_midi_events_cleanup();
+}
+
 TEST(export_melody) {
     int result = shared_midi_events_init(480);
     ASSERT_EQ(result, 0);
@@ -384,6 +424,7 @@ BEGIN_TEST_SUITE("MIDI Export Tests")
 
     /* Single Channel (Type 0) */
     RUN_TEST(export_single_note);
+    RUN_TEST(export_note_off_before_note_on_at_same_tick);
     RUN_TEST(export_melody);
     RUN_TEST(export_with_program_change);
     RUN_TEST(export_with_tempo);

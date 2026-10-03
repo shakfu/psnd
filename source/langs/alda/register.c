@@ -579,9 +579,17 @@ int loki_alda_populate_shared_buffer(editor_ctx_t *ctx) {
 
     shared_midi_events_clear();
 
-    /* Add initial tempo */
-    int tempo = loki_alda_get_tempo(ctx);
-    shared_midi_events_tempo(0, tempo);
+    /* The starting tempo, unless the score sets its own at tick 0: two tempo
+     * events at one tick leave the file's tempo to the sort order. */
+    int has_initial_tempo = 0;
+    for (int i = 0; i < event_count; i++) {
+        if (events[i].type == ALDA_EVT_TEMPO && events[i].tick == 0) {
+            has_initial_tempo = 1;
+        }
+    }
+    if (!has_initial_tempo) {
+        shared_midi_events_tempo(0, loki_alda_get_tempo(ctx));
+    }
 
     /* Convert each Alda event to shared format */
     for (int i = 0; i < event_count; i++) {

@@ -8,6 +8,7 @@
 #include "alda/context.h"
 #include "alda/ast.h"
 #include "alda/scheduler.h"
+#include "finalize.h"
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
@@ -337,18 +338,20 @@ static int parse_key_sig_arg(AldaNode* arg, int* out_sig) {
 
 typedef struct {
     const char* name;
-    int velocity;  /* 0-127, matches aldakit */
+    int velocity;  /* 0-127 */
 } DynamicEntry;
 
-/* Dynamics mapping: velocity values matching aldakit */
+/* The velocities Alda sends: its DynamicVolumes fractions times 127, rounded
+ * (client/model/attributes.go). The volumes in alda-language/attributes.md are
+ * rounded, so converting those instead is off by one for ppppp, pp, p, mp. */
 static const DynamicEntry DYNAMICS[] = {
     {"pppppp", 1},
-    {"ppppp", 10},
+    {"ppppp", 11},
     {"pppp", 20},
     {"ppp", 30},
-    {"pp", 39},
-    {"p", 50},
-    {"mp", 58},
+    {"pp", 40},
+    {"p", 49},
+    {"mp", 59},
     {"mf", 69},
     {"f", 79},
     {"ff", 88},
@@ -391,7 +394,7 @@ int alda_eval_attribute(AldaContext* ctx, AldaPartState* part, AldaNode* lisp_li
     int has_num = (get_number_arg(lisp_list, &num_val) == 0);
 
     /* Check for dynamics first (pp, mf, ff, etc.) */
-    /* Dynamics set velocity directly (0-127) to match aldakit */
+    /* Dynamics set velocity directly (0-127), as Alda sends them */
     int dynamic_vel = lookup_dynamic(name);
     if (dynamic_vel >= 0) {
         if (part) {
@@ -409,16 +412,21 @@ int alda_eval_attribute(AldaContext* ctx, AldaPartState* part, AldaNode* lisp_li
         if (has_num) {
             int tempo = (int)num_val;
             if (tempo > 0 && tempo <= 1000) {
-                /* Global if ends with !, otherwise per-part */
+                /* A part's own tempo places its own notes. Only the first
+                 * declared part's changes, and global ones, enter the MIDI
+                 * tempo map, as in Alda (client/model/score.go). */
                 if (name[strlen(name) - 1] == '!' || !part) {
                     ctx->global_tempo = tempo;
-                    /* Schedule tempo change at current position */
-                    int tick = part ? part->current_tick : 0;
-                    alda_schedule_tempo(ctx, tick, tempo);
+                    if (alda_record_tempo(ctx, part ? part->current_time : 0.0,
+                                          tempo, 1) < 0) {
+                        return -1;
+                    }
                 } else if (part) {
                     part->tempo = tempo;
-                    /* Schedule tempo change at part's current position */
-                    alda_schedule_tempo(ctx, part->current_tick, tempo);
+                    if (part == &ctx->parts[0] &&
+                        alda_record_tempo(ctx, part->current_time, tempo, 0) < 0) {
+                        return -1;
+                    }
                 }
             }
         }
@@ -431,7 +439,7 @@ int alda_eval_attribute(AldaContext* ctx, AldaPartState* part, AldaNode* lisp_li
         strcasecmp_local(name, "volume!") == 0 ||
         strcasecmp_local(name, "vol!") == 0) {
         if (has_num) {
-            int vol = (int)num_val;
+            double vol = num_val;
             /* Clamp to valid range */
             if (vol < 0) vol = 0;
             if (vol > 100) vol = 100;
@@ -452,7 +460,9 @@ int alda_eval_attribute(AldaContext* ctx, AldaPartState* part, AldaNode* lisp_li
         strcasecmp_local(name, "quantization!") == 0) {
         if (has_num) {
             int quant = (int)num_val;
-            if (quant >= 0 && quant <= 100) {
+            /* Any non-negative value: above 100 holds a note past the start
+             * of the next, which Alda allows (client/model/lisp.go). */
+            if (quant >= 0) {
                 if (name[strlen(name) - 1] == '!' || !part) {
                     ctx->global_quant = quant;
                 } else if (part) {
@@ -470,17 +480,46 @@ int alda_eval_attribute(AldaContext* ctx, AldaPartState* part, AldaNode* lisp_li
         strcasecmp_local(name, "pan!") == 0 ||
         strcasecmp_local(name, "panning!") == 0) {
         if (has_num) {
-            int pan_100 = (int)num_val;
-            if (pan_100 >= 0 && pan_100 <= 100) {
-                int pan_127 = pan_100 * 127 / 100;
+            if (num_val >= 0 && num_val <= 100) {
+                /* Sent as CC 10 with the part's next note */
+                int pan_127 = alda_percent_to_midi(num_val);
                 if (name[strlen(name) - 1] == '!' || !part) {
                     ctx->global_pan = pan_127;
+                    for (int i = 0; i < ctx->part_count; i++) {
+                        ctx->parts[i].pan = pan_127;
+                    }
                 } else if (part) {
                     part->pan = pan_127;
-                    /* Schedule pan change at current position */
-                    alda_schedule_pan(ctx, part, part->current_tick, pan_127);
                 }
             }
+        }
+        return 0;
+    }
+
+    /* track-volume / track-vol / track-volume! / track-vol! */
+    /* The part's overall level, which Alda sends as CC 11 (expression) */
+    if (strcasecmp_local(name, "track-volume") == 0 ||
+        strcasecmp_local(name, "track-vol") == 0 ||
+        strcasecmp_local(name, "track-volume!") == 0 ||
+        strcasecmp_local(name, "track-vol!") == 0) {
+        if (has_num && num_val >= 0 && num_val <= 100) {
+            int level = alda_percent_to_midi(num_val);
+            if (name[strlen(name) - 1] == '!' || !part) {
+                ctx->global_track_volume = level;
+                for (int i = 0; i < ctx->part_count; i++) {
+                    ctx->parts[i].track_volume = level;
+                }
+            } else {
+                part->track_volume = level;
+            }
+        }
+        return 0;
+    }
+
+    /* midi-channel: pin the part to a channel, 0-15 */
+    if (strcasecmp_local(name, "midi-channel") == 0) {
+        if (has_num && part && num_val >= 0 && num_val <= 15) {
+            part->pinned_channel = (int)num_val;
         }
         return 0;
     }
@@ -506,11 +545,8 @@ int alda_eval_attribute(AldaContext* ctx, AldaPartState* part, AldaNode* lisp_li
             /* Value is in beats (1.0 = quarter note) */
             /* Convert to denominator: 1.0 -> 4, 0.5 -> 8, 2.0 -> 2 */
             if (num_val > 0) {
-                double denom = 4.0 / num_val;
-                if (denom > 0) {
-                    part->default_duration = denom;
-                    part->default_dots = 0;
-                }
+                part->default_beats = num_val;
+                part->default_ms = 0.0;
             }
         }
         return 0;
@@ -522,8 +558,8 @@ int alda_eval_attribute(AldaContext* ctx, AldaPartState* part, AldaNode* lisp_li
         if (has_num && part) {
             double denom = num_val;
             if (denom > 0) {
-                part->default_duration = denom;
-                part->default_dots = 0;
+                part->default_beats = 4.0 / denom;
+                part->default_ms = 0.0;
             }
         }
         return 0;

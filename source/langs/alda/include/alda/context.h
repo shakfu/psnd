@@ -25,9 +25,9 @@ extern "C" {
  * midi-percussion - so 128 is one short; 256 matches ALDA_MAX_MARKERS and
  * ALDA_MAX_VARIABLES and leaves headroom.
  *
- * Parts are a fixed array inside AldaContext, so this sets the struct size:
- * roughly 444 bytes per part, putting the context near 150KB. That is why
- * callers allocate it on the heap or statically rather than on the stack.
+ * Parts are a fixed array inside AldaContext, so this sets the struct size.
+ * That is why callers allocate it on the heap or statically rather than on
+ * the stack.
  * MIDI channels are a separate, much smaller limit - parts share the 15
  * non-percussion channels dynamically. */
 #define ALDA_MAX_PARTS          256
@@ -44,6 +44,7 @@ extern "C" {
 #define ALDA_DEFAULT_VOLUME     54    /* 0-100, maps to velocity (mf) */
 #define ALDA_DEFAULT_QUANT      90    /* Quantization percentage */
 #define ALDA_DEFAULT_PAN        64    /* Center (MIDI 0-127, corresponds to Alda 50) */
+#define ALDA_DEFAULT_TRACK_VOLUME 100 /* MIDI CC 11, Alda's track-volume 100/127 */
 #define ALDA_DEFAULT_DURATION   4     /* Quarter note */
 
 /* ============================================================================
@@ -60,16 +61,6 @@ typedef enum {
 } AldaEventType;
 
 /* ============================================================================
- * Voice State (for polyphonic parts)
- * ============================================================================ */
-
-typedef struct {
-    int number;          /* Voice number (1-based, 0 = merged) */
-    int current_tick;    /* Voice-specific tick position */
-    int start_tick;      /* Tick where voice started */
-} AldaVoiceState;
-
-/* ============================================================================
  * Part State (per-instrument)
  * ============================================================================ */
 
@@ -77,28 +68,31 @@ typedef struct {
     char name[64];           /* Instrument name (e.g., "piano") */
     char alias[64];          /* Optional alias */
     int program;             /* GM program number (0-127) */
-    int channel;             /* MIDI channel (1-16) */
+    int channel;             /* MIDI channel (1-16) of the part's first note,
+                                set when the score is finalized */
+    int percussion;          /* Non-zero for the drum channel */
+    int pinned_channel;      /* 0-15 from (midi-channel N), -1 = assigned */
 
     /* Musical state */
     int octave;              /* Current octave (0-9), default 4 */
-    int volume;              /* 0-100, maps to velocity */
+    double volume;           /* 0-100, maps to velocity; -1 = use global */
     int velocity_override;   /* 0-127, -1 = use volume, set by dynamics */
     int tempo;               /* BPM, 0 = use global */
-    int quant;               /* Quantization percentage (0-100) */
+    int quant;               /* Quantization percentage (0 or more), -1 = use global */
     int pan;                 /* Pan position (0-127, 64=center) */
+    int track_volume;        /* MIDI CC 11 (0-127), Alda's track-volume */
 
-    /* Duration state */
-    double default_duration; /* Note value denominator (4=quarter, may be fractional) */
-    int default_dots;        /* Dotted duration count */
+    /* Default duration, which a note or rest with its own duration replaces.
+     * Kept as beats plus milliseconds because a duration such as c4~500ms
+     * has both. */
+    double default_beats;    /* Quarter note = 1 */
+    double default_ms;
 
-    /* Timing */
-    int current_tick;        /* Position in ticks from start */
-
-    /* Voice state (for polyphonic parts) */
-    AldaVoiceState voices[ALDA_MAX_VOICES];
-    int voice_count;
-    int current_voice;       /* -1 = merged (default), 0+ = specific voice index */
-    int in_voice_group;      /* Non-zero if inside V1:, V2:, etc. */
+    /* Timing. Positions are absolute seconds, not ticks: each part can run at
+     * its own tempo, which one shared tick timeline cannot express. Ticks are
+     * computed once the whole score is known (alda_events_finalize). */
+    double current_time;
+    double time_scale;       /* Factor on note lengths inside a cram, 1 outside */
 
     /* Key signature (sharps/flats for each scale degree C-B) */
     /* +1 = sharp, -1 = flat, 0 = natural */
@@ -135,9 +129,39 @@ typedef struct {
 
 typedef struct {
     char name[64];       /* Marker name */
-    int tick;            /* Tick position where marker was placed */
+    double time;         /* Position in seconds where marker was placed */
     int part_index;      /* Part context */
 } AldaMarker;
+
+/* A note as the interpreter produced it, before channels and ticks exist. */
+typedef struct {
+    double start;        /* Seconds */
+    double duration;     /* Sounding length in seconds, after quantization */
+    int pitch;
+    int velocity;
+    int part_index;
+    int program;
+    int pan;             /* CC 10 */
+    int track_volume;    /* CC 11 */
+    int percussion;
+    int pinned_channel;  /* 0-15, or -1 */
+    int owner;           /* Who holds a channel for the note: the part, or a
+                            later stretch of it moved to its own channel */
+    int source_line;
+} AldaNoteRecord;
+
+/* Where a voice group ended, for one part */
+typedef struct {
+    int part_index;
+    int note_index;      /* The part's first note after the group is at or after this */
+} AldaVoiceGroupEnd;
+
+/* A tempo change at a point in time. */
+typedef struct {
+    double time;         /* Seconds */
+    int tempo;           /* BPM */
+    int global;          /* Set by (tempo! N), which wins at the same time */
+} AldaTempoChange;
 
 /* ============================================================================
  * Variable (for Alda variables - deferred feature)
@@ -201,6 +225,21 @@ typedef struct AldaContext {
     AldaScheduledEvent* events;
     int event_count;
     int event_capacity;
+
+    /* What the interpreter records; alda_events_finalize() turns it into
+     * events. The MIDI tempo map follows Alda: the first declared part's
+     * tempo changes, overridden by (tempo! N) at the same time. */
+    AldaNoteRecord* notes;
+    int note_count;
+    int note_capacity;
+    AldaTempoChange* tempo_changes;   /* First part's and global changes */
+    int tempo_change_count;
+    int tempo_change_capacity;
+    AldaVoiceGroupEnd* voice_group_ends;
+    int voice_group_end_count;
+    int voice_group_end_capacity;
+    int base_tempo;                   /* Global tempo when interpretation began */
+    int global_track_volume;          /* 0-127, default 100 */
 
     /* Runtime flags */
     int no_sleep_mode;   /* Disable timing (for tests) */
@@ -326,6 +365,13 @@ int alda_effective_tempo(AldaContext* ctx, AldaPartState* part);
  * @return Velocity value.
  */
 int alda_effective_velocity(AldaContext* ctx, AldaPartState* part);
+
+/**
+ * @brief Convert an Alda 0-100 value to MIDI 0-127, rounded as Alda rounds.
+ * @param percent Value on Alda's 0-100 scale.
+ * @return MIDI value 0-127.
+ */
+int alda_percent_to_midi(double percent);
 
 /**
  * @brief Get effective quantization for a part.

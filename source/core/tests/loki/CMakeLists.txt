@@ -38,6 +38,11 @@ add_loki_test(repl_line_editor)
 add_loki_test(picker)
 add_loki_test(lang_bridge)
 add_loki_test(config)
+add_loki_test(treesitter_alda)
+target_compile_definitions(test_treesitter_alda PRIVATE
+    ALDA_EXAMPLES_DIR="${PSND_ROOT_DIR}/source/langs/alda/examples"
+    ALDA_SUITE_DIR="${PSND_ROOT_DIR}/source/langs/alda/tests/shared_suite"
+)
 add_loki_test(soundfont)
 add_loki_test(json)
 add_loki_test(jsonrpc)

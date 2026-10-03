@@ -8,8 +8,7 @@
 
   **Status:** Open
 
-  `tracker_engine.c:659` frees `engine->recent_by_track` but not the phrase arrays
-  each entry owns:
+  `tracker_engine.c:659` frees `engine->recent_by_track` but not the phrase arrays each entry owns:
 
   ```c
   if (engine->recent_by_track) {
@@ -17,31 +16,27 @@
       free(engine->recent_by_track);
   ```
 
-  Bounded per engine instance, so it does not grow during a session, but it does
-  leak on every engine create/destroy cycle and shows up under ASan.
+  Bounded per engine instance, so it does not grow during a session, but it does leak on every engine create/destroy cycle and shows up under ASan.
 
 - [ ] **Resolve the mongoose license conflict before distributing web builds** #licensing-third-party-attribution
-  - psnd is GPL-3.0. Mongoose (`source/thirdparty/mongoose-7.20/`) is
-    **GPL-2.0-only or commercial** — GPL-2.0-only is incompatible with
-    distributing a combined GPL-3.0 work.
-  - Affects the `web`, `tsf-web`, `fluid-web` and `fluid-csound-web` variants,
-    which CI now builds and uploads as artifacts.
-  - Options: obtain a commercial mongoose license, relicense psnd to
-    GPL-2.0-or-later, or replace mongoose with a permissively licensed HTTP/WS
-    server for the web host.
-  - This is a legal question, not a technical one — get a definitive answer
-    before publishing binaries of those variants.
+
+  - psnd is GPL-3.0. Mongoose (`source/thirdparty/mongoose-7.20/`) is **GPL-2.0-only or commercial** — GPL-2.0-only is incompatible with distributing a combined GPL-3.0 work.
+
+  - Affects the `web`, `tsf-web`, `fluid-web` and `fluid-csound-web` variants, which CI now builds and uploads as artifacts.
+
+  - Options: obtain a commercial mongoose license, relicense psnd to GPL-2.0-or-later, or replace mongoose with a permissively licensed HTTP/WS server for the web host.
+
+  - This is a legal question, not a technical one — get a definitive answer before publishing binaries of those variants.
 
 - [ ] Add the two missing third-party license texts #licensing-third-party-attribution
-  - `docs/licenses/` now carries a text per vendored dependency and
-    `scripts/build_release.py` copies it into every archive.
-  - Still missing: zstd (amalgamated sources vendored without upstream's
-    `LICENSE`/`COPYING`) and JUCE (fetched at configure time by `minihost`,
-    AGPL-3.0 or commercial). See `docs/licenses/README.md`.
+
+  - `docs/licenses/` now carries a text per vendored dependency and `scripts/build_release.py` copies it into every archive.
+
+  - Still missing: zstd (amalgamated sources vendored without upstream's `LICENSE`/`COPYING`) and JUCE (fetched at configure time by `minihost`, AGPL-3.0 or commercial). See `docs/licenses/README.md`.
 
 - [ ] Add `THIRD-PARTY.md` recording each dependency's upstream URL and pinned version #licensing-third-party-attribution
-  - 67 MB is vendored with no submodules, so there is currently no way to tell
-    what version anything is or to audit for upstream security fixes.
+
+  - 67 MB is vendored with no submodules, so there is currently no way to tell what version anything is or to audit for upstream security fixes.
 
 - [ ] Windows support (in progress) #cross-platform-support
 
@@ -84,50 +79,40 @@
   - Audio/MIDI backend configuration per platform
 
 - [ ] **Merge the duplicated REPL line editors** #stability-robustness
-  - `source/core/repl.c` (648 lines) and `source/core/loki/repl_line_editor.c`
-    (823 lines) are near-identical implementations of the same line editor;
-    `source/core/CMakeLists.txt:334-337` picks `repl.c` as the fallback when
-    loki is not built.
-  - The duplication has already caused a divergent fix: the `strcpy` hardening
-    was applied to one copy's `ARROW_UP` path only, and the other copy had
-    neither branch fixed (both are now bounded, but the asymmetry will recur).
-  - Extract the shared core into one file with the linenoise-backed path behind
-    `#ifdef LOKI_USE_LINENOISE` — the mechanism `repl_line_editor.c` already
-    uses internally — and delete the duplicate.
-  - Also collapses the duplicate headers `source/core/repl.h` (126 lines) and
-    `source/core/loki/repl.h` (125 lines).
+
+  - `source/core/repl.c` (648 lines) and `source/core/loki/repl_line_editor.c` (823 lines) are near-identical implementations of the same line editor; `source/core/CMakeLists.txt:334-337` picks `repl.c` as the fallback when loki is not built.
+
+  - The duplication has already caused a divergent fix: the `strcpy` hardening was applied to one copy's `ARROW_UP` path only, and the other copy had neither branch fixed (both are now bounded, but the asymmetry will recur).
+
+  - Extract the shared core into one file with the linenoise-backed path behind `#ifdef LOKI_USE_LINENOISE` — the mechanism `repl_line_editor.c` already uses internally — and delete the duplicate.
+
+  - Also collapses the duplicate headers `source/core/repl.h` (126 lines) and `source/core/loki/repl.h` (125 lines).
 
 - [ ] Define `MAX_INPUT_LENGTH` exactly once #stability-robustness
-  - `source/core/repl.h:20` defines it as **1024**;
-    `source/core/loki/repl_helpers.c:31` defines it as **4096** behind an
-    `#ifndef`, so the effective value depends on include order per translation
-    unit. Folds into the REPL merge above.
+
+  - `source/core/repl.h:20` defines it as **1024**; `source/core/loki/repl_helpers.c:31` defines it as **4096** behind an `#ifndef`, so the effective value depends on include order per translation unit. Folds into the REPL merge above.
 
 - [ ] Add checked-allocation wrappers and migrate incrementally #stability-robustness
-  - A heuristic scan (allocation whose next line is not a NULL check) flags
-    ~255 sites across `source/core` and `source/langs`. Many are false
-    positives, but the discipline is not uniform outside `loki/core.c`.
-  - Add `psnd_xmalloc`/`psnd_xcalloc`/`psnd_xstrdup` to `shared/` rather than
-    auditing every site by hand.
+
+  - A heuristic scan (allocation whose next line is not a NULL check) flags ~255 sites across `source/core` and `source/langs`. Many are false positives, but the discipline is not uniform outside `loki/core.c`.
+
+  - Add `psnd_xmalloc`/`psnd_xcalloc`/`psnd_xstrdup` to `shared/` rather than auditing every site by hand.
 
 - [ ] Reconsider `exit(1)` on allocation failure in `loki/core.c` #stability-robustness
-  - Sites at `core.c:252, 282, 293, 368, 380, 396` and elsewhere call
-    `perror("Out of memory"); exit(1);` (inherited from kilo).
-  - Two problems: unsaved buffer contents are lost with no recovery attempt,
-    and `libloki` is buildable as a shared library (`LOKI_BUILD_SHARED`), where
-    calling `exit()` from library code is not acceptable.
-  - The overflow guards preceding these allocations are correct — only the
-    failure response needs changing.
+
+  - Sites at `core.c:252, 282, 293, 368, 380, 396` and elsewhere call `perror("Out of memory"); exit(1);` (inherited from kilo).
+
+  - Two problems: unsaved buffer contents are lost with no recovery attempt, and `libloki` is buildable as a shared library (`LOKI_BUILD_SHARED`), where calling `exit()` from library code is not acceptable.
+
+  - The overflow guards preceding these allocations are correct — only the failure response needs changing.
 
 - [ ] Give `tracker_notes_to_string()` a buffer-size parameter #stability-robustness
-  - `tracker_plugin_notes.h:86` takes a bare `char* buffer` and
-    `tracker_plugin_notes.c:186` writes into it with `sprintf`. Bounded in
-    practice (max output `"A#-1"`), but the API invites a future overflow.
+
+  - `tracker_plugin_notes.h:86` takes a bare `char* buffer` and `tracker_plugin_notes.c:186` writes into it with `sprintf`. Bounded in practice (max output `"A#-1"`), but the API invites a future overflow.
 
 - [ ] Replace `atoi` with `strtol` in config and command parsing #stability-robustness
-  - 29 call sites. `atoi` silently returns 0 on garbage and is undefined on
-    overflow, so malformed user input becomes a valid-looking 0 instead of an
-    error.
+
+  - 29 call sites. `atoi` silently returns 0 on garbage and is undefined on overflow, so malformed user input becomes a valid-looking 0 instead of an error.
 
 - [ ] Web/host layer - `host.c`, `host_web.c`, `session.c`, `event.c` #code-coverage
 
@@ -146,30 +131,28 @@
 - [ ] `host_webview.cpp` - no tests #code-coverage
 
 - [ ] `tr7/impl/repl.c` (975 lines) - no tests #code-coverage
+
   - TR7 coverage is `test_reader.c` and `test_music.c` only.
 
 - [ ] `mhs/vfs.c` (1107 lines) - no tests #code-coverage
 
 - [ ] Make disabled-backend tests visibly skip rather than silently pass #code-coverage
-  - `shared_csound_backend_tests`, `shared_fluid_backend_tests` and
-    `shared_minihost_backend_tests` compile to stubs and pass in ~0.02s when
-    their backend is off, so a green local run says nothing about them.
+
+  - `shared_csound_backend_tests`, `shared_fluid_backend_tests` and `shared_minihost_backend_tests` compile to stubs and pass in ~0.02s when their backend is off, so a green local run says nothing about them.
+
   - Report them as skipped (`ctest` `SKIP_RETURN_CODE`) so the gap is legible.
 
 - [ ] Add an AddressSanitizer job #code-coverage
-  - `-DPSND_ENABLE_ASAN=ON` is already wired and the suite runs in ~2.5s, so
-    this is nearly free. Would likely surface more of the allocation issues
-    listed under Stability & Robustness.
+
+  - `-DPSND_ENABLE_ASAN=ON` is already wired and the suite runs in ~2.5s, so this is nearly free. Would likely surface more of the allocation issues listed under Stability & Robustness.
 
 - [ ] Add a `-Werror` job over first-party targets only #code-coverage
-  - `-Wall -Wextra -Wpedantic` is on for every first-party target but nothing
-    is `-Werror`, so warnings can accumulate unnoticed. Keep it to one
-    dedicated job so local builds do not break on new compiler versions, and
-    so the 23 vendored dependencies stay exempt.
+
+  - `-Wall -Wextra -Wpedantic` is on for every first-party target but nothing is `-Werror`, so warnings can accumulate unnoticed. Keep it to one dedicated job so local builds do not break on new compiler versions, and so the 23 vendored dependencies stay exempt.
 
 - [ ] Add a coverage job #code-coverage
-  - `-DPSND_ENABLE_COVERAGE=ON` is wired but never exercised; would replace the
-    hand-maintained coverage estimates in this section with real numbers.
+
+  - `-DPSND_ENABLE_COVERAGE=ON` is wired but never exercised; would replace the hand-maintained coverage estimates in this section with real numbers.
 
 - [ ] `lua.c` - Lua integration (extend existing `test_lua_api.c`) #code-coverage
 
@@ -206,20 +189,20 @@
 ## Medium
 
 - [ ] Fix remaining stale path references in docs #documentation
-  - The source tree moved from `src/` to `source/core/`; `new_lang.md` and
-    `docs/README.md` have been corrected, these have not:
-  - `docs/refactor.md` - ~30 dead `src/...` paths (whole document predates the
-    reorganization; consider marking historical like `design_review.md`)
+
+  - The source tree moved from `src/` to `source/core/`; `new_lang.md` and `docs/README.md` have been corrected, these have not:
+
+  - `docs/refactor.md` - ~30 dead `src/...` paths (whole document predates the reorganization; consider marking historical like `design_review.md`)
+
   - `docs/scsynth.md` - `src/supercollider/...`, `.psnd/synthdefs/`, `.psnd/config`
-  - `docs/LANG_IMPL_COMPARISON.md` - `source/langs/tr7/dispatch.c`,
-    `.psnd/mhs_history`, `source/core/loki/syntax/lang_*`
-  - `docs/language-extension-api.md` - refers to `.psnd/languages/alda.lua`;
-    the real file is `.psnd/languages/alda.toml`
+
+  - `docs/LANG_IMPL_COMPARISON.md` - `source/langs/tr7/dispatch.c`, `.psnd/mhs_history`, `source/core/loki/syntax/lang_*`
+
+  - `docs/language-extension-api.md` - refers to `.psnd/languages/alda.lua`; the real file is `.psnd/languages/alda.toml`
 
 - [ ] Document the threading contract for the audio backend globals #documentation
-  - `g_tsf`, `g_fluid`, `g_cs`, `g_link`, `g_async`, `g_queue` are reachable
-    from both the async playback thread and the UI thread. The locking
-    discipline works but is undocumented, which makes it easy to break.
+
+  - `g_tsf`, `g_fluid`, `g_cs`, `g_link`, `g_async`, `g_queue` are reachable from both the async playback thread and the UI thread. The locking discipline works but is undocumented, which makes it easy to break.
 
 - [ ] API reference generation #documentation
 
@@ -342,25 +325,26 @@
   - For pro audio workflows on Linux
 
 - [ ] Split the largest first-party files #future-architecture
-  - `loki/lua.c` (3644 lines) mixes binding registration, sandbox policy
-    (`:2923`) and UI output — separate registration from implementation.
-  - `tracker/tracker_view.c` (3059 lines) already has `_terminal`, `_json`,
-    `_undo`, `_clipboard` and `_theme` siblings; the remaining candidate is the
-    `strcmp` command-dispatch chain around `:2340`, which wants a table.
-  - `joy/impl/joy_primitives.c` (5173 lines) is a primitive table and is
-    arguably fine as-is.
+
+  - `loki/lua.c` (3644 lines) mixes binding registration, sandbox policy (`:2923`) and UI output — separate registration from implementation.
+
+  - `tracker/tracker_view.c` (3059 lines) already has `_terminal`, `_json`, `_undo`, `_clipboard` and `_theme` siblings; the remaining candidate is the `strcmp` command-dispatch chain around `:2340`, which wants a table.
+
+  - `joy/impl/joy_primitives.c` (5173 lines) is a primitive table and is arguably fine as-is.
 
 - [ ] Reduce the vendored dependency footprint #future-architecture
+
   - 67 MB across 23 dependencies with no submodules; `.git` is 16 MB.
-  - `tree-sitter-grammars` alone is 23 MB and is the obvious candidate for
-    `FetchContent` instead of vendoring.
+
+  - `tree-sitter-grammars` alone is 23 MB and is the obvious candidate for `FetchContent` instead of vendoring.
+
   - Depends on `THIRD-PARTY.md` (High Priority) to know what versions are pinned.
 
 - [ ] Support multiple editor sessions in one process #future-architecture
-  - Blocked by ~25 file-scope globals in `loki/` and `shared/` (`g_config`,
-    `g_commands`, `g_current_lang`, the audio singletons, ...).
-  - Prerequisite for the web host's "multiple client support" item, since
-    `WebHostData.ws_conn` is a single connection pointer today.
+
+  - Blocked by ~25 file-scope globals in `loki/` and `shared/` (`g_config`, `g_commands`, `g_current_lang`, the audio singletons, ...).
+
+  - Prerequisite for the web host's "multiple client support" item, since `WebHostData.ws_conn` is a single connection pointer today.
 
 - [ ] LSP client integration #editor-features
 
