@@ -1201,10 +1201,17 @@ TEST(parse_banner_comment) {
 }
 
 TEST(parse_hash_comment_variants) {
-    ASSERT_NOT_NULL(parse_ok("piano: c # trailing\nd"));
-    ASSERT_NOT_NULL(parse_ok("piano: c\n#no-space\nd"));
-    ASSERT_NOT_NULL(parse_ok("piano: c\n#\nd"));
-    ASSERT_NOT_NULL(parse_ok("piano: c\n#123\nd"));
+    const char* sources[] = {
+        "piano: c # trailing\nd",
+        "piano: c\n#no-space\nd",
+        "piano: c\n#\nd",
+        "piano: c\n#123\nd",
+    };
+    for (size_t i = 0; i < sizeof(sources) / sizeof(sources[0]); i++) {
+        AldaNode* ast = parse_ok(sources[i]);
+        ASSERT_NOT_NULL(ast);
+        alda_ast_free(ast);
+    }
 }
 
 BEGIN_TEST_SUITE("Alda Parser Tests")

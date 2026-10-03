@@ -22,6 +22,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Alda parse errors leaked the partial AST**: `alda_parse()` returned NULL without freeing the tree that error recovery had built, so every REPL or editor evaluation with a syntax error leaked it. LeakSanitizer found 1342 leaked allocations across `test_alda_parser` and `test_alda_parser_fuzz`; none remain.
+
 ## [0.4.0]
 
 Alda output now matches Alda 2.4.7 for all 60 example and shared-suite scores, checked by two CTest tests against `alda export` output (`docs/dev/conformance.md`). Before, none matched. **Most scores sound different**: every channel now starts at Alda's pan and track volume, and chords, voices, crams, per-part tempos and instrument names change notes in many examples.

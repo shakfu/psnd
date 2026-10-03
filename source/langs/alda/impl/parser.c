@@ -1065,6 +1065,7 @@ AldaNode* alda_parse(const char* source, const char* filename, char** error) {
         if (error) {
             *error = alda_parser_error_string(parser);
         }
+        alda_ast_free(ast);  /* Partial tree from error recovery */
         alda_parser_free(parser);
         return NULL;
     }
