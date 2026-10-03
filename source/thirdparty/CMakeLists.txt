@@ -173,6 +173,15 @@ if(BUILD_CSOUND_BACKEND)
 
     add_subdirectory(csound-6.18.1)
 
+    # Csound always adds a shared library alongside the static one we link. Both
+    # targets own the same flex/bison outputs, and parallel MSBuild projects ran
+    # win_flex twice into one csound_prelex.c, corrupting it.
+    foreach(_csound_shared CsoundLib64 csound64)
+        if(TARGET ${_csound_shared})
+            set_target_properties(${_csound_shared} PROPERTIES EXCLUDE_FROM_ALL TRUE)
+        endif()
+    endforeach()
+
     # Ensure sndfile is built before Csound links against it
     if(TARGET CsoundLib64-static)
         add_dependencies(CsoundLib64-static sndfile)

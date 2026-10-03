@@ -28,6 +28,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 - Build: FluidSynth builds downloaded gcem from GitHub at configure time despite the vendored copy. FluidSynth's `FindGCEM` searches `${CMAKE_SOURCE_DIR}/gcem`, which is the psnd root when FluidSynth is a subdirectory. A GitHub timeout then failed the macOS `fluid-web` release job. `GCEM_INCLUDE_DIR` is now preset to the vendored headers, which leaves the vendored FluidSynth unpatched.
 
+- Build: Windows Csound builds intermittently failed to compile `csound_prelex.c`. Csound builds a shared and a static library, and each target owns the same flex/bison outputs. Parallel MSBuild projects ran `win_flex` twice into one file. psnd links only the static library, so the shared one is now `EXCLUDE_FROM_ALL`. This also drops a redundant Csound compile from every Csound build.
+
 ## [0.4.0]
 
 Alda output now matches Alda 2.4.7 for all 60 example and shared-suite scores, checked by two CTest tests against `alda export` output (`docs/dev/conformance.md`). Before, none matched. **Most scores sound different**: every channel now starts at Alda's pan and track volume, and chords, voices, crams, per-part tempos and instrument names change notes in many examples.
