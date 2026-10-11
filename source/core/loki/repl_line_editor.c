@@ -99,6 +99,11 @@ void repl_editor_init(ReplLineEditor *ed) {
 #endif
 }
 
+#ifdef LOKI_USE_LINENOISE
+/* Editor currently registered with linenoise's completion callback. */
+static ReplLineEditor *g_completion_editor = NULL;
+#endif
+
 void repl_editor_cleanup(ReplLineEditor *ed) {
     for (int i = 0; i < ed->history_len; i++) {
         free(ed->history[i]);
@@ -106,6 +111,12 @@ void repl_editor_cleanup(ReplLineEditor *ed) {
     repl_completion_clear(ed);
 
 #ifdef LOKI_USE_LINENOISE
+    /* Drop the global completion pointer if it still refers to this editor,
+     * otherwise the next TAB would dereference freed memory. */
+    if (g_completion_editor == ed) {
+        g_completion_editor = NULL;
+        if (ed->ln_ctx) linenoise_set_completion_callback(ed->ln_ctx, NULL);
+    }
     /* Don't destroy context here - it's managed by repl_linenoise module */
     ed->ln_ctx = NULL;
 #endif
@@ -119,9 +130,6 @@ void repl_set_completion_words(ReplLineEditor *ed, const char **words, int count
 }
 
 #ifdef LOKI_USE_LINENOISE
-/* Adapter structure to pass to linenoise completion callback */
-static ReplLineEditor *g_completion_editor = NULL;
-
 /* Linenoise completion callback adapter */
 static void linenoise_completion_adapter(const char *buf, linenoise_completions_t *lc) {
     if (!g_completion_editor) return;
@@ -188,9 +196,15 @@ void repl_set_completion(ReplLineEditor *ed, ReplCompletionCallback cb, void *us
     ed->completion_user_data = user_data;
 
 #ifdef LOKI_USE_LINENOISE
-    if (ed->ln_ctx && cb) {
-        g_completion_editor = ed;
-        linenoise_set_completion_callback(ed->ln_ctx, linenoise_completion_adapter);
+    if (ed->ln_ctx) {
+        if (cb) {
+            g_completion_editor = ed;
+            linenoise_set_completion_callback(ed->ln_ctx, linenoise_completion_adapter);
+        } else if (g_completion_editor == ed) {
+            /* Unregistering must actually unregister. */
+            g_completion_editor = NULL;
+            linenoise_set_completion_callback(ed->ln_ctx, NULL);
+        }
     }
 #endif
 }
@@ -697,6 +711,7 @@ char *repl_readline(editor_ctx_t *syntax_ctx, ReplLineEditor *ed, const char *pr
     while (1) {
         fflush(stdout);
         int c = terminal_read_key(STDIN_FILENO);
+        if (c == -1) return NULL;  /* Input error: treat as EOF. */
 
         if (c == ENTER) {
             write(STDOUT_FILENO, "\r\n", 2);

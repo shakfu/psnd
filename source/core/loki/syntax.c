@@ -132,6 +132,7 @@ void syntax_update_row(editor_ctx_t *ctx, t_erow *row) {
 #endif
 
     int default_ran = 0;
+    int prev_cb_lang = row->cb_lang;   /* to detect code-block state changes */
 
     if (ctx->view.syntax != NULL) {
         if (ctx->view.syntax->type == HL_TYPE_MARKDOWN) {
@@ -271,14 +272,16 @@ void syntax_update_row(editor_ctx_t *ctx, t_erow *row) {
         }
     }
 
-    /* Lua custom highlighting is in loki_editor.c */
-    (void)default_ran; /* Suppress unused variable warning */
+    /* Let the Lua `loki.highlight_row` hook post-process this row. */
+    lua_apply_highlight_row(ctx, row, default_ran);
 
     /* Propagate syntax change to the next row if the open comment
      * state changed. This may recursively affect all the following rows
      * in the file. */
     int oc = syntax_row_has_open_comment(row);
-    if (row->hl_oc != oc && row->idx+1 < ctx->model.numrows)
+    int cb_changed = (row->cb_lang != prev_cb_lang);
+    if ((row->hl_oc != oc || cb_changed) &&
+        row->idx >= 0 && row->idx+1 < ctx->model.numrows)
         syntax_update_row(ctx, &ctx->model.row[row->idx+1]);
     row->hl_oc = oc;
 }
@@ -295,6 +298,7 @@ int syntax_format_color(editor_ctx_t *ctx, int hl, char *buf, size_t bufsize) {
 
 /* Select the syntax highlight scheme depending on the filename. */
 void syntax_select_for_filename(editor_ctx_t *ctx, const char *filename) {
+    if (!filename) return;   /* Unnamed buffer: no syntax to select. */
 #ifdef LOKI_USE_LINENOISE
     /* Free any existing tree-sitter state */
     if (ctx->model.ts_state != NULL) {

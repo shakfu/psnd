@@ -491,7 +491,7 @@ EditorViewModel *editor_session_snapshot(EditorSession *session) {
     } else {
         int cx = 1;
         int filerow = ctx->view.rowoff + ctx->view.cy;
-        t_erow *row = (filerow >= ctx->model.numrows) ? NULL : &ctx->model.row[filerow];
+        t_erow *row = (filerow < 0 || filerow >= ctx->model.numrows) ? NULL : &ctx->model.row[filerow];
         if (row) {
             for (int j = ctx->view.coloff; j < (ctx->view.cx + ctx->view.coloff); j++) {
                 if (j < row->size && row->chars[j] == TAB)

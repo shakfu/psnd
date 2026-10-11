@@ -20,12 +20,6 @@ static char* strndup(const char* s, size_t n) {
 }
 #endif
 
-/* Forward declarations of editor functions we need */
-void editor_row_insert_char(editor_ctx_t *ctx, t_erow *row, int at, int c);
-void editor_row_del_char(editor_ctx_t *ctx, t_erow *row, int at);
-void editor_insert_row(editor_ctx_t *ctx, int at, char *s, size_t len);
-void editor_del_row(editor_ctx_t *ctx, int at);
-
 /* Undo grouping heuristics */
 #define UNDO_GROUP_TIMEOUT 2         /* 2 seconds gap = new group */
 #define UNDO_GROUP_MOVEMENT_GAP 2    /* Cursor moved >2 positions = new group */
@@ -55,6 +49,11 @@ struct undo_state {
 /* ======================== Initialization ======================== */
 
 void undo_init(editor_ctx_t *ctx, int capacity, size_t memory_limit) {
+    /* editor_ctx_init() installs a default undo_state, so callers that want
+     * different limits re-init over one that already exists. Overwriting the
+     * pointer leaked it. */
+    undo_free(ctx);
+
     struct undo_state *undo = malloc(sizeof(struct undo_state));
     if (!undo) return;
 
@@ -80,17 +79,30 @@ void undo_init(editor_ctx_t *ctx, int capacity, size_t memory_limit) {
     ctx->model.undo_state = undo;
 }
 
+/* Does this operation type own a heap-allocated line_op.content? */
+static int entry_owns_content(undo_op_type_t type) {
+    return type == UNDO_INSERT_LINE || type == UNDO_DELETE_LINE ||
+           type == UNDO_DELETE_BLOCK;
+}
+
+/* Physical slot of the i'th live entry (0 = oldest) in the circular buffer. */
+static int entry_slot(const struct undo_state *undo, int i) {
+    return (undo->head - undo->count + i + undo->capacity) % undo->capacity;
+}
+
 void undo_free(editor_ctx_t *ctx) {
     if (!ctx->model.undo_state) return;
 
     struct undo_state *undo = ctx->model.undo_state;
 
-    /* Free all line_op content strings */
+    /* Free all line_op content strings. Live entries are at the circular
+     * offsets given by entry_slot(), not at 0..count-1 -- iterating linearly
+     * leaked every entry once the ring had wrapped. */
     for (int i = 0; i < undo->count; i++) {
-        undo_entry_t *e = &undo->entries[i];
-        if ((e->type == UNDO_INSERT_LINE || e->type == UNDO_DELETE_LINE) &&
-            e->data.line_op.content) {
+        undo_entry_t *e = &undo->entries[entry_slot(undo, i)];
+        if (entry_owns_content(e->type) && e->data.line_op.content) {
             free(e->data.line_op.content);
+            e->data.line_op.content = NULL;
         }
     }
 
@@ -116,8 +128,9 @@ static int should_break_group(struct undo_state *undo, undo_op_type_t op,
     if (undo->last_op == UNDO_INSERT_CHAR && op == UNDO_DELETE_CHAR) return 1;
     if (undo->last_op == UNDO_DELETE_CHAR && op == UNDO_INSERT_CHAR) return 1;
 
-    /* Line operations always break groups */
-    if (op == UNDO_INSERT_LINE || op == UNDO_DELETE_LINE) return 1;
+    /* Line and block operations always break groups */
+    if (op == UNDO_INSERT_LINE || op == UNDO_DELETE_LINE ||
+        op == UNDO_DELETE_BLOCK) return 1;
 
     /* Cursor jumped (user moved cursor manually) */
     if (undo->last_edit_row != row) return 1;
@@ -142,8 +155,7 @@ void undo_break_group(editor_ctx_t *ctx) {
 /* ======================== Recording Operations ======================== */
 
 static void free_entry_data(undo_entry_t *entry, struct undo_state *undo) {
-    if ((entry->type == UNDO_INSERT_LINE || entry->type == UNDO_DELETE_LINE) &&
-        entry->data.line_op.content) {
+    if (entry_owns_content(entry->type) && entry->data.line_op.content) {
         undo->memory_used -= entry->data.line_op.length;
         free(entry->data.line_op.content);
         entry->data.line_op.content = NULL;
@@ -192,9 +204,19 @@ static void record_operation(editor_ctx_t *ctx, undo_entry_t *entry) {
     undo->head = (undo->head + 1) % undo->capacity;
     undo->current = undo->count;
 
-    /* Track memory for line operations */
-    if (entry->type == UNDO_INSERT_LINE || entry->type == UNDO_DELETE_LINE) {
+    /* Track memory for content-carrying operations */
+    if (entry_owns_content(entry->type)) {
         undo->memory_used += entry->data.line_op.length;
+    }
+
+    /* Enforce the memory limit by dropping the oldest history. Keep at least
+     * one entry so the most recent edit always stays undoable. */
+    while (undo->memory_limit > 0 && undo->memory_used > undo->memory_limit &&
+           undo->count > 1) {
+        int oldest = entry_slot(undo, 0);
+        free_entry_data(&undo->entries[oldest], undo);
+        undo->count--;
+        if (undo->current > undo->count) undo->current = undo->count;
     }
 }
 
@@ -223,6 +245,25 @@ void undo_record_delete_char(editor_ctx_t *ctx, int row, int col, char ch) {
         .row = row,
         .col = col,
         .data.char_op.ch = ch,
+        .cursor_row = ctx->view.cy,
+        .cursor_col = ctx->view.cx,
+        .cursor_rowoff = ctx->view.rowoff,
+        .cursor_coloff = ctx->view.coloff
+    };
+
+    record_operation(ctx, &entry);
+}
+
+void undo_record_delete_block(editor_ctx_t *ctx, int row, int col,
+                              const char *content, int length) {
+    if (!ctx->model.undo_state || length <= 0) return;
+
+    undo_entry_t entry = {
+        .type = UNDO_DELETE_BLOCK,
+        .row = row,
+        .col = col,
+        .data.line_op.content = strndup(content, length),
+        .data.line_op.length = length,
         .cursor_row = ctx->view.cy,
         .cursor_col = ctx->view.cx,
         .cursor_rowoff = ctx->view.rowoff,
@@ -272,6 +313,100 @@ void undo_record_delete_line(editor_ctx_t *ctx, int row, int col,
 
 /* ======================== Undo/Redo Operations ======================== */
 
+
+/* ---------------- Multi-line range helpers (for UNDO_DELETE_BLOCK) --------- */
+
+/* Insert 'text' (which may contain '\n') into the buffer at (row, col).
+ * Rows are split/joined as needed. Used to undo a block deletion. */
+static void insert_text_at(editor_ctx_t *ctx, int row, int col,
+                           const char *text, int length) {
+    if (row < 0 || row > ctx->model.numrows) return;
+
+    /* An insertion point past the last row means appending new rows. */
+    if (row == ctx->model.numrows) {
+        editor_insert_row(ctx, row, "", 0);
+    }
+
+    t_erow *target = &ctx->model.row[row];
+    if (col < 0) col = 0;
+    if (col > target->size) col = target->size;
+
+    /* Detach the part of the row that follows the insertion point; it has to
+     * end up after the last inserted line. */
+    int tail_len = target->size - col;
+    char *tail = malloc(tail_len + 1);
+    if (!tail) return;
+    memcpy(tail, target->chars + col, tail_len);
+    tail[tail_len] = '\0';
+
+    target->chars[col] = '\0';
+    target->size = col;
+    editor_update_row(ctx, target);
+
+    /* Walk the text one '\n'-separated segment at a time. */
+    int cur_row = row;
+    int seg_start = 0;
+    for (int i = 0; i <= length; i++) {
+        if (i == length || text[i] == '\n') {
+            int seg_len = i - seg_start;
+            if (seg_start == 0) {
+                /* First segment continues the row we split. */
+                editor_row_append_string(ctx, &ctx->model.row[cur_row],
+                                         (char *)text + seg_start, seg_len);
+            } else {
+                cur_row++;
+                editor_insert_row(ctx, cur_row, (char *)text + seg_start, seg_len);
+            }
+            seg_start = i + 1;
+        }
+    }
+
+    /* Re-attach the tail to the final row. */
+    if (tail_len > 0) {
+        editor_row_append_string(ctx, &ctx->model.row[cur_row], tail, tail_len);
+    }
+    free(tail);
+}
+
+/* Delete 'length' bytes starting at (row, col), where a row boundary counts
+ * as one byte ('\n'). Used to redo a block deletion. */
+static void delete_range_at(editor_ctx_t *ctx, int row, int col, int length) {
+    if (row < 0 || row >= ctx->model.numrows || length <= 0) return;
+
+    t_erow *cur = &ctx->model.row[row];
+    if (col < 0) col = 0;
+    if (col > cur->size) col = cur->size;
+
+    int remaining = length;
+    while (remaining > 0 && row < ctx->model.numrows) {
+        cur = &ctx->model.row[row];
+        int avail = cur->size - col;   /* bytes left on this row */
+
+        if (remaining <= avail) {
+            memmove(cur->chars + col, cur->chars + col + remaining,
+                    cur->size - col - remaining);
+            cur->size -= remaining;
+            cur->chars[cur->size] = '\0';
+            editor_update_row(ctx, cur);
+            remaining = 0;
+        } else {
+            /* Drop the rest of this row plus its newline, then merge the
+             * following row up. */
+            cur->chars[col] = '\0';
+            cur->size = col;
+            editor_update_row(ctx, cur);
+            remaining -= avail + 1;
+            if (row + 1 < ctx->model.numrows) {
+                t_erow *next = &ctx->model.row[row + 1];
+                editor_row_append_string(ctx, cur, next->chars, next->size);
+                editor_del_row(ctx, row + 1);
+            } else {
+                break;
+            }
+        }
+    }
+}
+
 /* Apply single undo operation (reverse the operation) */
 static void apply_undo(editor_ctx_t *ctx, undo_entry_t *entry) {
     /* Suppress undo recording while applying undo */
@@ -300,20 +435,45 @@ static void apply_undo(editor_ctx_t *ctx, undo_entry_t *entry) {
             break;
 
         case UNDO_INSERT_LINE:
-            /* Undo line insert = delete the line (merge with previous) */
+            /* Undo a line split at (row, col) = join row+1 back onto row.
+             * This covers all three record sites in editor_insert_newline:
+             * a split mid-line, an empty row inserted at column 0 (the
+             * original text sits at row+1), and an empty row appended at
+             * EOF (no row+1 exists, so the row itself is removed). */
             if (entry->row >= 0 && entry->row < ctx->model.numrows) {
-                /* Delete the newline that was inserted */
-                editor_del_row(ctx, entry->row + 1);
+                if (entry->row + 1 < ctx->model.numrows) {
+                    t_erow *tail = &ctx->model.row[entry->row + 1];
+                    editor_row_append_string(ctx, &ctx->model.row[entry->row],
+                                             tail->chars, tail->size);
+                    editor_del_row(ctx, entry->row + 1);
+                } else {
+                    editor_del_row(ctx, entry->row);
+                }
             }
             break;
 
         case UNDO_DELETE_LINE:
-            /* Undo line delete = re-insert the line (split) */
+            /* Undo a line merge = split row back at the recorded join column.
+             * Re-inserting the tail is not enough: the text merged into
+             * row must also be truncated away, or it ends up duplicated. */
             if (entry->row >= 0 && entry->row < ctx->model.numrows) {
                 editor_insert_row(ctx, entry->row + 1,
                                  entry->data.line_op.content,
                                  entry->data.line_op.length);
+                row = &ctx->model.row[entry->row];
+                if (entry->col >= 0 && entry->col < row->size) {
+                    row->chars[entry->col] = '\0';
+                    row->size = entry->col;
+                    editor_update_row(ctx, row);
+                }
             }
+            break;
+
+        case UNDO_DELETE_BLOCK:
+            /* Undo a range delete = put the text back where it was. */
+            insert_text_at(ctx, entry->row, entry->col,
+                           entry->data.line_op.content,
+                           entry->data.line_op.length);
             break;
     }
 
@@ -355,19 +515,39 @@ static void apply_redo(editor_ctx_t *ctx, undo_entry_t *entry) {
             break;
 
         case UNDO_INSERT_LINE:
-            /* Redo line insert = split line again */
+            /* Redo a line split: move the tail past 'col' onto a new row and
+             * truncate the head, mirroring editor_insert_newline. */
             if (entry->row >= 0 && entry->row < ctx->model.numrows) {
-                editor_insert_row(ctx, entry->row + 1,
-                                 entry->data.line_op.content,
-                                 entry->data.line_op.length);
+                row = &ctx->model.row[entry->row];
+                int col = entry->col;
+                if (col < 0) col = 0;
+                if (col > row->size) col = row->size;
+                editor_insert_row(ctx, entry->row + 1, row->chars + col,
+                                 row->size - col);
+                row = &ctx->model.row[entry->row];  /* insert may realloc */
+                row->chars[col] = '\0';
+                row->size = col;
+                editor_update_row(ctx, row);
+            } else if (entry->row == ctx->model.numrows) {
+                /* Newline appended past the last row. */
+                editor_insert_row(ctx, entry->row, "", 0);
             }
             break;
 
         case UNDO_DELETE_LINE:
-            /* Redo line delete = merge lines again */
+            /* Redo a line merge: append row+1 onto row before removing it,
+             * otherwise the merged text is dropped. */
             if (entry->row >= 0 && entry->row + 1 < ctx->model.numrows) {
+                t_erow *tail = &ctx->model.row[entry->row + 1];
+                editor_row_append_string(ctx, &ctx->model.row[entry->row],
+                                         tail->chars, tail->size);
                 editor_del_row(ctx, entry->row + 1);
             }
+            break;
+
+        case UNDO_DELETE_BLOCK:
+            delete_range_at(ctx, entry->row, entry->col,
+                            entry->data.line_op.length);
             break;
     }
 

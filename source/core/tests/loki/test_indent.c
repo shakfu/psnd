@@ -488,6 +488,44 @@ TEST(indent_electric_mismatched_brackets) {
 }
 
 /* Test suite runner */
+/* Test: indent_apply() uses the file row, not the screen row, when scrolled */
+TEST(indent_apply_when_scrolled) {
+    editor_ctx_t *ctx = create_test_ctx();
+    ctx->view.screenrows = 24;
+    ctx->view.screencols = 80;
+
+    for (int i = 0; i < 19; i++) insert_line(ctx, "x");
+    insert_line(ctx, "    if (condition) {");   /* file row 19 */
+    editor_insert_row(ctx, 20, "", 0);
+    ctx->view.rowoff = 15;
+    ctx->view.cy = 5;                           /* file row 20 */
+    ctx->view.cx = 0;
+
+    indent_apply(ctx);
+
+    ASSERT_EQ(indent_get_level(ctx, 20), 8);
+    free_test_ctx(ctx);
+}
+
+/* Test: indent_electric_char() uses the file row when scrolled */
+TEST(indent_electric_dedent_when_scrolled) {
+    editor_ctx_t *ctx = create_test_ctx();
+    ctx->view.screenrows = 24;
+    ctx->view.screencols = 80;
+
+    for (int i = 0; i < 20; i++) insert_line(ctx, "x");
+    insert_line(ctx, "if (condition) {");      /* file row 20 */
+    insert_line(ctx, "        code");
+    editor_insert_row(ctx, 22, "        ", 8);
+    ctx->view.rowoff = 20;
+    ctx->view.cy = 2;                           /* file row 22 */
+    ctx->view.cx = 8;
+
+    ASSERT_EQ(indent_electric_char(ctx, '}'), 1);
+    ASSERT_EQ(indent_get_level(ctx, 22), 0);
+    free_test_ctx(ctx);
+}
+
 BEGIN_TEST_SUITE("Auto-Indent Module")
 
     /* indent_get_level() tests */
@@ -525,4 +563,6 @@ BEGIN_TEST_SUITE("Auto-Indent Module")
     RUN_TEST(indent_electric_nested_braces);
     RUN_TEST(indent_electric_mismatched_brackets);
 
+    RUN_TEST(indent_apply_when_scrolled);
+    RUN_TEST(indent_electric_dedent_when_scrolled);
 END_TEST_SUITE()

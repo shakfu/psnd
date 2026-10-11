@@ -144,11 +144,12 @@ struct t_editor_syntax HLDB[] = {
     {NULL, NULL, "", "", "", NULL, 0, HL_TYPE_C}
 };
 
-#define HLDB_ENTRIES (sizeof(HLDB)/sizeof(HLDB[0]))
+/* Slots in HLDB, including the {NULL,...} terminator. */
+#define HLDB_SLOTS (sizeof(HLDB)/sizeof(HLDB[0]))
 
-/* Get the number of built-in language entries */
+/* Get the number of built-in language entries (excluding the terminator). */
 unsigned int loki_get_builtin_language_count(void) {
-    return HLDB_ENTRIES;
+    return (unsigned int)(HLDB_SLOTS - 1);
 }
 
 /* ======================= Helper Functions for Markdown ==================== */
@@ -255,6 +256,14 @@ int detect_code_block_language(const char *line) {
 /* Update syntax highlighting for markdown files (proper editor integration).
  * This is the main entry point called by the editor core. */
 void editor_update_syntax_markdown(editor_ctx_t *ctx, t_erow *row) {
+    /* realloc(ptr, 0) frees ptr and returns NULL; returning here on NULL
+     * would leave row->hl dangling. */
+    if (row->rsize == 0) {
+        free(row->hl);
+        row->hl = NULL;
+        row->cb_lang = CB_LANG_NONE;
+        return;
+    }
     unsigned char *new_hl = realloc(row->hl, row->rsize);
     if (new_hl == NULL) return;
     row->hl = new_hl;
@@ -618,6 +627,14 @@ static void highlight_csound_score(t_erow *row) {
 /* Update syntax highlighting for Csound CSD files.
  * This handles the multi-section structure of CSD files. */
 void editor_update_syntax_csound(editor_ctx_t *ctx, t_erow *row) {
+    /* realloc(ptr, 0) frees ptr and returns NULL; returning here on NULL
+     * would leave row->hl dangling. */
+    if (row->rsize == 0) {
+        free(row->hl);
+        row->hl = NULL;
+        row->cb_lang = CB_LANG_NONE;
+        return;
+    }
     unsigned char *new_hl = realloc(row->hl, row->rsize);
     if (new_hl == NULL) return;
     row->hl = new_hl;

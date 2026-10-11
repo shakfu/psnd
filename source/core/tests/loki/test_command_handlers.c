@@ -178,6 +178,18 @@ TEST(goto_rejects_non_numeric) {
     free_test_ctx(&ctx);
 }
 
+TEST(goto_rejects_trailing_garbage) {
+    const char *lines[] = {"one", "two", "three"};
+    editor_ctx_t ctx;
+    init_test_ctx_with_lines(&ctx, lines, 3);
+
+    ASSERT_EQ(cmd_goto(&ctx, "2abc"), 0);
+    ASSERT_EQ(cmd_goto(&ctx, "99999999999999999999"), 0);
+    ASSERT_EQ(cmd_goto(&ctx, "2 "), 1);
+
+    free_test_ctx(&ctx);
+}
+
 TEST(goto_adjusts_scroll_down) {
     const char *lines[] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
                            "11", "12", "13", "14", "15", "16", "17", "18", "19", "20",
@@ -190,10 +202,11 @@ TEST(goto_adjusts_scroll_down) {
 
     cmd_goto(&ctx, "25");
 
-    /* Scroll should have adjusted to show line 25 */
+    /* view.cy is screen-relative: the cursor's file row is rowoff + cy. */
     ASSERT_TRUE(ctx.view.rowoff > 0);
-    ASSERT_TRUE(ctx.view.cy >= ctx.view.rowoff);
-    ASSERT_TRUE(ctx.view.cy < ctx.view.rowoff + ctx.view.screenrows);
+    ASSERT_EQ(ctx.view.rowoff + ctx.view.cy, 24);
+    ASSERT_TRUE(ctx.view.cy >= 0);
+    ASSERT_TRUE(ctx.view.cy < ctx.view.screenrows);
 
     free_test_ctx(&ctx);
 }
@@ -212,6 +225,7 @@ TEST(goto_adjusts_scroll_up) {
 
     /* Scroll should have adjusted to show line 3 */
     ASSERT_TRUE(ctx.view.rowoff <= 2);
+    ASSERT_EQ(ctx.view.rowoff + ctx.view.cy, 2);
 
     free_test_ctx(&ctx);
 }
@@ -878,6 +892,38 @@ TEST(plugin_invalid_subcommand) {
 
 test_stats_t test_stats;
 
+TEST(substitute_long_line_not_truncated) {
+    /* A fixed 4096-byte buffer used to cut the tail off longer lines. */
+    char *line = malloc(5004);
+    memset(line, 'a', 5000);
+    memcpy(line + 5000, "foo", 4);
+    const char *lines[] = {line};
+    editor_ctx_t ctx;
+    init_test_ctx_with_lines(&ctx, lines, 1);
+
+    ASSERT_EQ(cmd_substitute(&ctx, "s/foo/barbaz/"), 1);
+    ASSERT_EQ(ctx.model.row[0].size, 5006);
+    ASSERT_STR_EQ(get_row_content(&ctx, 0) + 5000, "barbaz");
+
+    free_test_ctx(&ctx);
+    free(line);
+}
+
+TEST(substitute_uses_file_row_when_scrolled) {
+    const char *lines[] = {"zero", "one", "two", "three"};
+    editor_ctx_t ctx;
+    init_test_ctx_with_lines(&ctx, lines, 4);
+
+    ctx.view.rowoff = 2;
+    ctx.view.cy = 1;   /* file row 3 */
+
+    ASSERT_EQ(cmd_substitute(&ctx, "s/three/THREE/"), 1);
+    ASSERT_STR_EQ(get_row_content(&ctx, 3), "THREE");
+    ASSERT_STR_EQ(get_row_content(&ctx, 1), "one");
+
+    free_test_ctx(&ctx);
+}
+
 BEGIN_TEST_SUITE("Command Handlers")
 
     /* Goto tests */
@@ -889,6 +935,7 @@ BEGIN_TEST_SUITE("Command Handlers")
     RUN_TEST(goto_rejects_negative);
     RUN_TEST(goto_rejects_empty_args);
     RUN_TEST(goto_rejects_non_numeric);
+    RUN_TEST(goto_rejects_trailing_garbage);
     RUN_TEST(goto_adjusts_scroll_down);
     RUN_TEST(goto_adjusts_scroll_up);
 
@@ -910,6 +957,8 @@ BEGIN_TEST_SUITE("Command Handlers")
     RUN_TEST(substitute_entire_line);
     RUN_TEST(substitute_on_specific_line);
     RUN_TEST(substitute_no_line_to_substitute);
+    RUN_TEST(substitute_long_line_not_truncated);
+    RUN_TEST(substitute_uses_file_row_when_scrolled);
 
     /* Set tests */
     RUN_TEST(set_toggle_wrap);

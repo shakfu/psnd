@@ -127,11 +127,6 @@ static void respond_ok(void) {
     fflush(stdout);
 }
 
-static void respond_ok_with(const char *extra_json) {
-    printf("{\"ok\":true,%s}\n", extra_json);
-    fflush(stdout);
-}
-
 static void respond_error(const char *msg) {
     JsonBuilder jb;
     json_builder_init(&jb);

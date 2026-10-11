@@ -531,6 +531,133 @@ TEST(undo_multiple_undo_redo_cycles) {
     cleanup_ctx(&ctx);
 }
 
+/* ============================================================================
+ * Line-operation round-trips (regressions for the undo/redo line bugs)
+ *
+ * These drive the real editing entry points (editor_insert_newline /
+ * editor_del_char) rather than undo_record_* directly, so they cover the
+ * record-then-apply path end to end.
+ * ============================================================================ */
+
+/* Enter in the middle of a line, then undo, must restore the whole line.
+ * Previously the tail row was deleted and never re-joined -> "hello world"
+ * came back as "hello". */
+TEST(undo_split_midline_restores_full_line) {
+    editor_ctx_t ctx;
+    init_ctx_with_undo(&ctx, "hello world");
+
+    ctx.view.cy = 0;
+    ctx.view.cx = 5;
+    editor_insert_newline(&ctx);
+
+    ASSERT_EQ(ctx.model.numrows, 2);
+    ASSERT_STR_EQ(ctx.model.row[0].chars, "hello");
+    ASSERT_STR_EQ(ctx.model.row[1].chars, " world");
+
+    ASSERT_EQ(undo_perform(&ctx), 1);
+    ASSERT_EQ(ctx.model.numrows, 1);
+    ASSERT_STR_EQ(ctx.model.row[0].chars, "hello world");
+    ASSERT_EQ(ctx.model.row[0].size, 11);
+
+    cleanup_ctx(&ctx);
+}
+
+/* Enter at column 0 inserts a blank line above; undo must remove the blank
+ * line, not the line that holds the text. */
+TEST(undo_split_at_col0_keeps_text) {
+    editor_ctx_t ctx;
+    init_ctx_with_undo(&ctx, "hello");
+
+    ctx.view.cy = 0;
+    ctx.view.cx = 0;
+    editor_insert_newline(&ctx);
+
+    ASSERT_EQ(ctx.model.numrows, 2);
+
+    ASSERT_EQ(undo_perform(&ctx), 1);
+    ASSERT_EQ(ctx.model.numrows, 1);
+    ASSERT_STR_EQ(ctx.model.row[0].chars, "hello");
+
+    cleanup_ctx(&ctx);
+}
+
+/* Redo of a split must reproduce the split exactly. */
+TEST(redo_split_midline_reproduces_split) {
+    editor_ctx_t ctx;
+    init_ctx_with_undo(&ctx, "hello world");
+
+    ctx.view.cy = 0;
+    ctx.view.cx = 5;
+    editor_insert_newline(&ctx);
+    ASSERT_EQ(undo_perform(&ctx), 1);
+    ASSERT_STR_EQ(ctx.model.row[0].chars, "hello world");
+
+    ASSERT_EQ(redo_perform(&ctx), 1);
+    ASSERT_EQ(ctx.model.numrows, 2);
+    ASSERT_STR_EQ(ctx.model.row[0].chars, "hello");
+    ASSERT_STR_EQ(ctx.model.row[1].chars, " world");
+
+    cleanup_ctx(&ctx);
+}
+
+/* Backspace at column 0 merges two lines; undo must split them back without
+ * duplicating the merged text. Previously undo produced "helloworldworld". */
+TEST(undo_line_merge_does_not_duplicate) {
+    editor_ctx_t ctx;
+    const char *lines[] = {"hello", "world"};
+    init_multiline_ctx_with_undo(&ctx, 2, lines);
+
+    ctx.view.cy = 1;
+    ctx.view.cx = 0;
+    editor_del_char(&ctx);
+
+    ASSERT_EQ(ctx.model.numrows, 1);
+    ASSERT_STR_EQ(ctx.model.row[0].chars, "helloworld");
+
+    ASSERT_EQ(undo_perform(&ctx), 1);
+    ASSERT_EQ(ctx.model.numrows, 2);
+    ASSERT_STR_EQ(ctx.model.row[0].chars, "hello");
+    ASSERT_STR_EQ(ctx.model.row[1].chars, "world");
+
+    cleanup_ctx(&ctx);
+}
+
+/* Redo of a merge must keep the merged text (it used to drop the tail). */
+TEST(redo_line_merge_keeps_text) {
+    editor_ctx_t ctx;
+    const char *lines[] = {"hello", "world"};
+    init_multiline_ctx_with_undo(&ctx, 2, lines);
+
+    ctx.view.cy = 1;
+    ctx.view.cx = 0;
+    editor_del_char(&ctx);
+    ASSERT_EQ(undo_perform(&ctx), 1);
+
+    ASSERT_EQ(redo_perform(&ctx), 1);
+    ASSERT_EQ(ctx.model.numrows, 1);
+    ASSERT_STR_EQ(ctx.model.row[0].chars, "helloworld");
+
+    cleanup_ctx(&ctx);
+}
+
+/* Splitting a line must leave row.idx consistent, and deleting a row must
+ * renumber the rows after it downward (they used to be incremented). */
+TEST(row_idx_stays_consistent_across_delete) {
+    editor_ctx_t ctx;
+    const char *lines[] = {"aaa", "bbb", "ccc"};
+    init_multiline_ctx_with_undo(&ctx, 3, lines);
+
+    editor_del_row(&ctx, 0);
+
+    ASSERT_EQ(ctx.model.numrows, 2);
+    ASSERT_STR_EQ(ctx.model.row[0].chars, "bbb");
+    ASSERT_EQ(ctx.model.row[0].idx, 0);
+    ASSERT_STR_EQ(ctx.model.row[1].chars, "ccc");
+    ASSERT_EQ(ctx.model.row[1].idx, 1);
+
+    cleanup_ctx(&ctx);
+}
+
 BEGIN_TEST_SUITE("Undo/Redo System")
     /* Initialization */
     RUN_TEST(undo_init_creates_state);
@@ -558,6 +685,12 @@ BEGIN_TEST_SUITE("Undo/Redo System")
     /* Line operations */
     RUN_TEST(undo_record_insert_line_makes_undoable);
     RUN_TEST(undo_record_delete_line_makes_undoable);
+    RUN_TEST(undo_split_midline_restores_full_line);
+    RUN_TEST(undo_split_at_col0_keeps_text);
+    RUN_TEST(redo_split_midline_reproduces_split);
+    RUN_TEST(undo_line_merge_does_not_duplicate);
+    RUN_TEST(redo_line_merge_keeps_text);
+    RUN_TEST(row_idx_stays_consistent_across_delete);
 
     /* Memory and capacity */
     RUN_TEST(undo_clear_removes_all_history);

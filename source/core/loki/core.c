@@ -18,6 +18,7 @@ see LICENSE.
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <limits.h>
 #include <errno.h>
 #include <string.h>
 #include <ctype.h>
@@ -141,6 +142,7 @@ void editor_ctx_init(editor_ctx_t *ctx) {
     memset(ctx->view.colors, 0, sizeof(ctx->view.colors));
     /* Command mode state */
     command_mode_init(ctx);
+    ctx->view.quit_times = KILO_QUIT_TIMES;
     /* Undo/redo system (1000 operations, 10MB memory limit) */
     undo_init(ctx, 1000, 10 * 1024 * 1024);
     /* Auto-indent system */
@@ -234,6 +236,8 @@ void editor_atexit(void) {
     if (editor_for_atexit) {
         editor_cleanup_resources(editor_for_atexit);
     }
+    /* Release every buffer's rows and undo history, not just the active one. */
+    buffers_free();
     cleanup_dynamic_languages();
 }
 
@@ -281,9 +285,10 @@ void editor_update_row(editor_ctx_t *ctx, t_erow *row) {
 /* Insert a row at the specified position, shifting the other rows on the bottom
  * if required. */
 void editor_insert_row(editor_ctx_t *ctx, int at, char *s, size_t len) {
-    if (at > ctx->model.numrows) return;
-    /* Check for integer overflow in allocation size calculation */
-    if ((size_t)ctx->model.numrows >= SIZE_MAX / sizeof(t_erow)) {
+    if (at < 0 || at > ctx->model.numrows) return;
+    /* Guard against overflowing the int row counter itself; the byte-size
+     * comparison against SIZE_MAX could never trigger on any real platform. */
+    if (ctx->model.numrows >= INT_MAX - 1) {
         fprintf(stderr, "Too many rows, cannot allocate more memory\n");
         exit(1);
     }
@@ -303,7 +308,8 @@ void editor_insert_row(editor_ctx_t *ctx, int at, char *s, size_t len) {
         perror("Out of memory");
         exit(1);
     }
-    memcpy(ctx->model.row[at].chars,s,len+1);
+    memcpy(ctx->model.row[at].chars,s,len);
+    ctx->model.row[at].chars[len] = '\0';
     ctx->model.row[at].hl = NULL;
     ctx->model.row[at].hl_oc = 0;
     ctx->model.row[at].cb_lang = CB_LANG_NONE;
@@ -327,11 +333,12 @@ void editor_free_row(t_erow *row) {
 void editor_del_row(editor_ctx_t *ctx, int at) {
     t_erow *row;
 
-    if (at >= ctx->model.numrows) return;
+    if (at < 0 || at >= ctx->model.numrows) return;
     row = ctx->model.row+at;
     editor_free_row(row);
     memmove(ctx->model.row+at,ctx->model.row+at+1,sizeof(ctx->model.row[0])*(ctx->model.numrows-at-1));
-    for (int j = at; j < ctx->model.numrows-1; j++) ctx->model.row[j].idx++;
+    /* Rows after 'at' shifted up by one, so their idx decreases. */
+    for (int j = at; j < ctx->model.numrows-1; j++) ctx->model.row[j].idx--;
     ctx->model.numrows--;
     ctx->model.dirty++;
 }
@@ -366,7 +373,7 @@ char *editor_rows_to_string(editor_ctx_t *ctx, int *buflen) {
 /* Insert a character at the specified position in a row, moving the remaining
  * chars on the right if needed. */
 void editor_row_insert_char(editor_ctx_t *ctx, t_erow *row, int at, int c) {
-    if (!row) return;
+    if (!row || at < 0) return;
     char *new_chars;
     if (at > row->size) {
         /* Pad the string with spaces if the insert location is outside the
@@ -416,7 +423,7 @@ void editor_row_append_string(editor_ctx_t *ctx, t_erow *row, char *s, size_t le
 
 /* Delete the character at offset 'at' from the specified row. */
 void editor_row_del_char(editor_ctx_t *ctx, t_erow *row, int at) {
-    if (row->size <= at) return;
+    if (!row || at < 0 || at >= row->size) return;
     /* Bytes at+1..size, which includes the null terminator */
     memmove(row->chars+at,row->chars+at+1,row->size-at);
     row->size--;
@@ -428,7 +435,7 @@ void editor_row_del_char(editor_ctx_t *ctx, t_erow *row, int at) {
 void editor_insert_char(editor_ctx_t *ctx, int c) {
     int filerow = ctx->view.rowoff+ctx->view.cy;
     int filecol = ctx->view.coloff+ctx->view.cx;
-    t_erow *row = (filerow >= ctx->model.numrows) ? NULL : &ctx->model.row[filerow];
+    t_erow *row = (filerow < 0 || filerow >= ctx->model.numrows) ? NULL : &ctx->model.row[filerow];
 
     /* If the row where the cursor is currently located does not exist in our
      * logical representaion of the file, add enough empty rows as needed. */
@@ -457,7 +464,7 @@ void editor_insert_char(editor_ctx_t *ctx, int c) {
 void editor_insert_newline(editor_ctx_t *ctx) {
     int filerow = ctx->view.rowoff+ctx->view.cy;
     int filecol = ctx->view.coloff+ctx->view.cx;
-    t_erow *row = (filerow >= ctx->model.numrows) ? NULL : &ctx->model.row[filerow];
+    t_erow *row = (filerow < 0 || filerow >= ctx->model.numrows) ? NULL : &ctx->model.row[filerow];
 
     if (!row) {
         if (filerow == ctx->model.numrows) {
@@ -501,7 +508,7 @@ fixcursor:
 void editor_del_char(editor_ctx_t *ctx) {
     int filerow = ctx->view.rowoff+ctx->view.cy;
     int filecol = ctx->view.coloff+ctx->view.cx;
-    t_erow *row = (filerow >= ctx->model.numrows) ? NULL : &ctx->model.row[filerow];
+    t_erow *row = (filerow < 0 || filerow >= ctx->model.numrows) ? NULL : &ctx->model.row[filerow];
 
     if (!row || (filecol == 0 && filerow == 0)) return;
     if (filecol == 0) {
@@ -533,8 +540,9 @@ void editor_del_char(editor_ctx_t *ctx) {
         else
             ctx->view.cx--;
     }
-    if (row) editor_update_row(ctx, row);
-    /* Note: dirty already incremented by editor_row_del_char or editor_del_row */
+    /* Note: the row was already re-rendered by editor_row_del_char (or
+     * removed entirely by editor_del_row); updating it again here just
+     * repeated the syntax pass. dirty is likewise already incremented. */
 }
 
 /* Load the specified program in the editor memory and returns 0 on success
@@ -572,6 +580,16 @@ int editor_open(editor_ctx_t *ctx, const char *filename) {
         }
     }
     rewind(fp);  /* Go back to start of file to read normally */
+
+    /* Replace the buffer contents rather than appending to them. */
+    for (int j = 0; j < ctx->model.numrows; j++) {
+        editor_free_row(&ctx->model.row[j]);
+    }
+    free(ctx->model.row);
+    ctx->model.row = NULL;
+    ctx->model.numrows = 0;
+    /* Undo entries reference row indices in the old buffer. */
+    undo_clear(ctx);
 
     char *line = NULL;
     size_t linecap = 0;
@@ -674,6 +692,17 @@ static int build_render_segments(editor_ctx_t *ctx, t_erow *row, int row_idx,
         }
     }
 
+    /* If the cap was reached mid-line, emit the remaining text as one
+     * segment rather than dropping it from the display. */
+    if (seg_start < len && seg_count < MAX_RENDER_SEGMENTS) {
+        segments[seg_count].text = c + seg_start;
+        segments[seg_count].len = len - seg_start;
+        segments[seg_count].hl_type = hl_const_to_type(current_hl);
+        segments[seg_count].selected = current_selected;
+        segments[seg_count].is_playing = is_playing_row;
+        seg_count++;
+    }
+
     return seg_count;
 }
 
@@ -716,6 +745,17 @@ static int build_render_segments_view(const EditorView *view, t_erow *row,
             current_hl = next_hl;
             current_selected = next_selected;
         }
+    }
+
+    /* If the cap was reached mid-line, emit the remaining text as one
+     * segment rather than dropping it from the display. */
+    if (seg_start < len && seg_count < MAX_RENDER_SEGMENTS) {
+        segments[seg_count].text = c + seg_start;
+        segments[seg_count].len = len - seg_start;
+        segments[seg_count].hl_type = hl_const_to_type(current_hl);
+        segments[seg_count].selected = current_selected;
+        segments[seg_count].is_playing = is_playing_row;
+        seg_count++;
     }
 
     return seg_count;
@@ -1012,7 +1052,7 @@ static void editor_refresh_screen_via_renderer(editor_ctx_t *ctx) {
         /* Calculate cursor x position within content */
         int cx = 1;
         int filerow = ctx->view.rowoff + ctx->view.cy;
-        t_erow *row = (filerow >= ctx->model.numrows) ? NULL : &ctx->model.row[filerow];
+        t_erow *row = (filerow < 0 || filerow >= ctx->model.numrows) ? NULL : &ctx->model.row[filerow];
         if (row) {
             for (int j = ctx->view.coloff; j < (ctx->view.cx + ctx->view.coloff); j++) {
                 if (j < row->size && row->chars[j] == TAB)
@@ -1106,11 +1146,11 @@ void editor_refresh_screen(editor_ctx_t *ctx) {
                 int welcomelen = snprintf(welcome,sizeof(welcome),
                     "Loki editor -- version %s\x1b[0K\r\n", PSND_VERSION);
                 int padding = (ctx->view.screencols-welcomelen)/2;
-                if (padding) {
+                if (padding > 0) {
                     terminal_buffer_append(&ab,"~",1);
                     padding--;
                 }
-                while(padding--) terminal_buffer_append(&ab," ",1);
+                while(padding-- > 0) terminal_buffer_append(&ab," ",1);
                 terminal_buffer_append(&ab,welcome,welcomelen);
             } else {
                 /* Empty lines: show gutter filler if line numbers enabled */
@@ -1252,7 +1292,9 @@ void editor_refresh_screen(editor_ctx_t *ctx) {
     }
 
     int len = snprintf(status, sizeof(status), " %s%s  %.20s - %d lines %s",
-        lang_str, mode_str, ctx->model.filename, ctx->model.numrows, ctx->model.dirty ? "(modified)" : "");
+        lang_str, mode_str,
+        ctx->model.filename ? ctx->model.filename : "[No Name]",
+        ctx->model.numrows, ctx->model.dirty ? "(modified)" : "");
 
     /* Show playing indicator if any language is playing */
     const char *playing = loki_lang_is_playing(ctx) ? "[PLAYING] " : "";
@@ -1307,7 +1349,7 @@ void editor_refresh_screen(editor_ctx_t *ctx) {
         /* Editor mode: cursor is in the text area */
         int cx = 1;
         int filerow = ctx->view.rowoff+ctx->view.cy;
-        t_erow *row = (filerow >= ctx->model.numrows) ? NULL : &ctx->model.row[filerow];
+        t_erow *row = (filerow < 0 || filerow >= ctx->model.numrows) ? NULL : &ctx->model.row[filerow];
         if (row) {
             for (int j = ctx->view.coloff; j < (ctx->view.cx+ctx->view.coloff); j++) {
                 if (j < row->size && row->chars[j] == TAB)
@@ -1333,7 +1375,7 @@ void editor_refresh_screen(editor_ctx_t *ctx) {
     snprintf(buf,sizeof(buf),"\x1b[%d;%dH",cursor_row,cursor_col);
     terminal_buffer_append(&ab,buf,strlen(buf));
     terminal_buffer_append(&ab,"\x1b[?25h",6); /* Show cursor. */
-    write(STDOUT_FILENO,ab.b,ab.len);
+    write_ignore_result(STDOUT_FILENO,ab.b,ab.len);
     terminal_buffer_free(&ab);
 }
 
@@ -1348,7 +1390,7 @@ void editor_move_cursor(editor_ctx_t *ctx, int key) {
     int filerow = ctx->view.rowoff+ctx->view.cy;
     int filecol = ctx->view.coloff+ctx->view.cx;
     int rowlen;
-    t_erow *row = (filerow >= ctx->model.numrows) ? NULL : &ctx->model.row[filerow];
+    t_erow *row = (filerow < 0 || filerow >= ctx->model.numrows) ? NULL : &ctx->model.row[filerow];
 
     switch(key) {
     case ARROW_LEFT:
@@ -1406,7 +1448,7 @@ void editor_move_cursor(editor_ctx_t *ctx, int key) {
     /* Fix cx if the current line has not enough chars. */
     filerow = ctx->view.rowoff+ctx->view.cy;
     filecol = ctx->view.coloff+ctx->view.cx;
-    row = (filerow >= ctx->model.numrows) ? NULL : &ctx->model.row[filerow];
+    row = (filerow < 0 || filerow >= ctx->model.numrows) ? NULL : &ctx->model.row[filerow];
     rowlen = row ? row->size : 0;
     if (filecol > rowlen) {
         ctx->view.cx -= filecol-rowlen;
@@ -1420,28 +1462,20 @@ void editor_move_cursor(editor_ctx_t *ctx, int key) {
 /* ========================= Modal Key Processing ============================ */
 
 /* Process a single keypress - delegates to modal editing module */
-void editor_process_keypress(editor_ctx_t *ctx, int fd) {
+int editor_process_keypress(editor_ctx_t *ctx, int fd) {
     /* All modal editing logic is now in loki_modal.c */
-    modal_process_keypress(ctx, fd);
+    return modal_process_keypress(ctx, fd);
 }
 
 void init_editor(editor_ctx_t *ctx) {
-    ctx->view.cx = 0;
-    ctx->view.cy = 0;
-    ctx->view.rowoff = 0;
-    ctx->view.coloff = 0;
-    ctx->model.numrows = 0;
-    ctx->model.row = NULL;
-    ctx->model.dirty = 0;
-    ctx->model.filename = NULL;
-    ctx->view.syntax = NULL;
-    ctx->view.mode = MODE_NORMAL;  /* Start in normal mode (vim-like) */
-    ctx->view.word_wrap = 1;  /* Word wrap enabled by default */
-    ctx->view.sel_active = 0;
-    ctx->view.sel_start_x = ctx->view.sel_start_y = 0;
-    ctx->view.sel_end_x = ctx->view.sel_end_y = 0;
+    /* Thin wrapper over editor_ctx_init(), which is the single complete
+     * initialiser (undo state, indent config, command state, colors). This
+     * used to be a partial second contract that left those fields untouched,
+     * so it was only safe on an already-zeroed struct. */
+    editor_ctx_init(ctx);
+
+    ctx->view.word_wrap = 1;  /* Word wrap on by default in the terminal editor */
     syntax_init_default_colors(ctx);
-    /* Lua REPL init and Lua initialization are in loki_editor.c */
     terminal_update_window_size(ctx);
     /* Note: SIGWINCH registration now happens in terminal_host_init() */
     /* Note: editor_for_atexit is set explicitly after buffers_init() */

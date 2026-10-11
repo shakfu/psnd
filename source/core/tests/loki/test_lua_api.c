@@ -318,6 +318,61 @@ TEST(lua_handles_syntax_errors) {
  * Lua API functions work correctly (tested above) is sufficient proof
  * that context storage works. */
 
+#ifdef LUA_SANDBOX
+/* The sandbox must not be able to load native code: package.loadlib and the
+ * C searchers would bypass the removed os/io libraries. */
+TEST(lua_sandbox_blocks_native_loaders) {
+    editor_ctx_t ctx;
+    init_ctx_with_lua(&ctx);
+    lua_State *L = ctx_L(&ctx);
+    ASSERT_NOT_NULL(L);
+
+    ASSERT_EQ(luaL_dostring(L,
+        "return package.loadlib == nil and package.cpath == '' "
+        "and #package.searchers == 2 and os == nil and io == nil"), LUA_OK);
+    ASSERT_TRUE(lua_toboolean(L, -1));
+    lua_pop(L, 1);
+
+    free_ctx_with_lua(&ctx);
+}
+#endif
+
+/* loki.register_command() callbacks are dispatched in normal mode. They
+ * used to be stored and never called. */
+TEST(lua_register_command_dispatches_in_normal_mode) {
+    editor_ctx_t ctx;
+    init_ctx_with_lua(&ctx);
+    lua_State *L = ctx_L(&ctx);
+    ASSERT_NOT_NULL(L);
+    ctx.view.mode = MODE_NORMAL;
+
+    ASSERT_EQ(luaL_dostring(L,
+        "loki.register_command('Z', function() HITS = (HITS or 0) + 1 end)"), LUA_OK);
+    modal_process_normal_mode_key(&ctx, 0, 'Z');
+
+    lua_getglobal(L, "HITS");
+    ASSERT_EQ((int)lua_tointeger(L, -1), 1);
+    lua_pop(L, 1);
+
+    free_ctx_with_lua(&ctx);
+}
+
+TEST(lua_register_command_reports_errors) {
+    editor_ctx_t ctx;
+    init_ctx_with_lua(&ctx);
+    lua_State *L = ctx_L(&ctx);
+    ASSERT_NOT_NULL(L);
+    ctx.view.mode = MODE_NORMAL;
+
+    ASSERT_EQ(luaL_dostring(L,
+        "loki.register_command('Z', function() error('boom') end)"), LUA_OK);
+    modal_process_normal_mode_key(&ctx, 0, 'Z');
+    ASSERT_TRUE(strncmp(ctx.view.statusmsg, "Command error:", 14) == 0);
+    ASSERT_EQ(lua_gettop(L), 0);   /* stack left balanced */
+
+    free_ctx_with_lua(&ctx);
+}
+
 BEGIN_TEST_SUITE("Lua API Integration")
     RUN_TEST(lua_state_initializes);
     RUN_TEST(lua_status_sets_message);
@@ -331,4 +386,9 @@ BEGIN_TEST_SUITE("Lua API Integration")
     RUN_TEST(lua_set_color_updates_colors);
     RUN_TEST(lua_register_language_adds_syntax);
     RUN_TEST(lua_handles_syntax_errors);
+#ifdef LUA_SANDBOX
+    RUN_TEST(lua_sandbox_blocks_native_loaders);
+#endif
+    RUN_TEST(lua_register_command_dispatches_in_normal_mode);
+    RUN_TEST(lua_register_command_reports_errors);
 END_TEST_SUITE()

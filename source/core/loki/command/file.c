@@ -7,16 +7,20 @@
 
 /* :w, :write - Save file */
 int cmd_write(editor_ctx_t *ctx, const char *args) {
+    char *previous_name = NULL;
+    int renamed = 0;
+
     /* Use provided filename or current filename */
     if (args && args[0]) {
-        /* Save to new filename */
-        if (ctx->model.filename) {
-            free(ctx->model.filename);
+        char *new_name = strdup(args);
+        if (!new_name) {
+            editor_set_status_msg(ctx, "Out of memory");
+            return 0;
         }
-        ctx->model.filename = strdup(args);
-
-        /* Update buffer display name */
-        buffer_update_display_name(buffer_get_current_id());
+        /* Keep the old name so it can be restored if the write fails. */
+        previous_name = ctx->model.filename;
+        ctx->model.filename = new_name;
+        renamed = 1;
     }
 
     if (!ctx->model.filename) {
@@ -26,6 +30,17 @@ int cmd_write(editor_ctx_t *ctx, const char *args) {
 
     /* Save file using existing editor_save() */
     int len = editor_save(ctx);
+    if (len < 0 && renamed) {
+        /* Roll the rename back: the buffer still belongs to the old file. */
+        free(ctx->model.filename);
+        ctx->model.filename = previous_name;
+        previous_name = NULL;
+    }
+    if (renamed && len >= 0) {
+        free(previous_name);
+        previous_name = NULL;
+        buffer_update_display_name(buffer_get_current_id());
+    }
     if (len >= 0) {
         editor_set_status_msg(ctx, "\"%s\" %dL written",
                              ctx->model.filename, ctx->model.numrows);

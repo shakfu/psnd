@@ -90,6 +90,7 @@ void editor_find(editor_ctx_t *ctx, int fd) {
         editor_refresh_screen(ctx);
 
         int c = terminal_read_key(fd);
+        if (c == -1) c = ESC;  /* Input error: abort the search like ESC. */
         if (c == DEL_KEY || c == CTRL_H || c == BACKSPACE) {
             if (qlen != 0) query[--qlen] = '\0';
             last_match = -1;
@@ -138,13 +139,17 @@ void editor_find(editor_ctx_t *ctx, int fd) {
             if (match) {
                 t_erow *row = &ctx->model.row[current];
                 last_match = current;
-                if (row->hl) {
-                    saved_hl_line = current;
+                if (row->hl && row->rsize > 0) {
                     saved_hl = malloc(row->rsize);
                     if (saved_hl) {
+                        saved_hl_line = current;
                         memcpy(saved_hl,row->hl,row->rsize);
+                        /* Only highlight what we can put back afterwards. */
+                        int n = qlen;
+                        if (match_offset + n > row->rsize)
+                            n = row->rsize - match_offset;
+                        if (n > 0) memset(row->hl+match_offset,HL_MATCH,n);
                     }
-                    memset(row->hl+match_offset,HL_MATCH,qlen);
                 }
                 ctx->view.cy = 0;
                 ctx->view.cx = match_offset;

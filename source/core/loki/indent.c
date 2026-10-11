@@ -180,10 +180,12 @@ static void insert_indentation(editor_ctx_t *ctx, int level) {
 void indent_apply(editor_ctx_t *ctx) {
     if (!ctx->model.indent_config) return;
     if (!ctx->model.indent_config->enabled) return;
-    if (ctx->view.cy == 0) return;  /* No previous line */
+    int filerow = ctx->view.rowoff + ctx->view.cy;
+    if (filerow <= 0 || filerow > ctx->model.numrows) return;  /* No previous line */
 
     /* Get indentation from previous line */
-    int prev_row = ctx->view.cy - 1;
+    int prev_row = filerow - 1;
+    if (prev_row >= ctx->model.numrows) return;
     int base_indent = indent_get_level(ctx, prev_row);
 
     /* Check if previous line ends with opening brace/bracket */
@@ -205,13 +207,17 @@ int indent_electric_char(editor_ctx_t *ctx, int c) {
     if (!ctx->model.indent_config->enabled) return 0;  /* Respect general enabled flag */
     if (!ctx->model.indent_config->electric_enabled) return 0;
     if (!is_closing_char(c)) return 0;
-    if (ctx->view.cy < 0 || ctx->view.cy >= ctx->model.numrows) return 0;
+    int filerow = ctx->view.rowoff + ctx->view.cy;
+    if (filerow < 0 || filerow >= ctx->model.numrows) return 0;
 
-    t_erow *row = &ctx->model.row[ctx->view.cy];
+    t_erow *row = &ctx->model.row[filerow];
+
+    int filecol = ctx->view.coloff + ctx->view.cx;
+    if (filecol > row->size) filecol = row->size;
 
     /* Check if line contains only whitespace before cursor */
-    for (int i = 0; i < ctx->view.cx; i++) {
-        if (!isspace(row->chars[i])) {
+    for (int i = 0; i < filecol; i++) {
+        if (!isspace((unsigned char)row->chars[i])) {
             return 0;  /* Non-whitespace before cursor - no dedent */
         }
     }
@@ -222,7 +228,7 @@ int indent_electric_char(editor_ctx_t *ctx, int c) {
     int depth = 1;  /* We're looking for the matching opening */
 
     /* Scan backwards from previous line */
-    for (int r = ctx->view.cy - 1; r >= 0; r--) {
+    for (int r = filerow - 1; r >= 0; r--) {
         t_erow *scan_row = &ctx->model.row[r];
         for (int i = scan_row->size - 1; i >= 0; i--) {
             char ch = scan_row->chars[i];
@@ -242,20 +248,21 @@ int indent_electric_char(editor_ctx_t *ctx, int c) {
 found_match:
     /* If we didn't find a match, just dedent by one level */
     if (target_indent < 0) {
-        int current_indent = indent_get_level(ctx, ctx->view.cy);
+        int current_indent = indent_get_level(ctx, filerow);
         target_indent = current_indent - ctx->model.indent_config->width;
         if (target_indent < 0) target_indent = 0;
     }
 
     /* Calculate how much to dedent */
-    int current_indent = indent_get_level(ctx, ctx->view.cy);
+    int current_indent = indent_get_level(ctx, filerow);
     int dedent_amount = current_indent - target_indent;
 
     if (dedent_amount <= 0) return 0;  /* Already at or past target */
 
     /* Delete leading whitespace characters */
     int deleted = 0;
-    while (deleted < dedent_amount && ctx->view.cx > 0) {
+    while (deleted < dedent_amount &&
+           (ctx->view.coloff + ctx->view.cx) > 0) {
         /* Delete character before cursor (backspace) */
         editor_del_char(ctx);
         deleted++;

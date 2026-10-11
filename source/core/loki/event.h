@@ -85,7 +85,7 @@ typedef struct {
 
         /* EVENT_RESIZE: Terminal resize */
         struct {
-            int rows;
+            int rows;   /* Text rows, excluding the host's status lines */
             int cols;
         } resize;
 

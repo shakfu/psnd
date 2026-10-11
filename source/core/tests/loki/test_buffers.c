@@ -315,6 +315,41 @@ TEST(buffer_command_workflow) {
 }
 
 /* Test suite */
+/* Test: a path that does not exist yet opens as an empty, named buffer.
+ * It used to fail, so ':e newfile' could not create a file. */
+TEST(buffer_create_nonexistent_file) {
+    editor_ctx_t ctx;
+    init_test_context(&ctx);
+    buffers_init(&ctx);
+
+    const char *path = "psnd_test_buffer_does_not_exist.txt";
+    remove(path);
+    int id = buffer_create(path);
+    ASSERT_TRUE(id > 0);
+
+    editor_ctx_t *b = buffer_get(id);
+    ASSERT_NOT_NULL(b);
+    ASSERT_EQ(b->model.numrows, 1);
+    ASSERT_EQ(b->model.dirty, 0);
+    ASSERT_STR_EQ(b->model.filename, path);
+
+    buffers_free();
+}
+
+/* Test: new buffers inherit word_wrap from the current one */
+TEST(buffer_create_inherits_word_wrap) {
+    editor_ctx_t ctx;
+    init_test_context(&ctx);
+    ctx.view.word_wrap = 1;
+    buffers_init(&ctx);
+    ASSERT_EQ(buffer_get_current()->view.word_wrap, 1);
+
+    int id = buffer_create(NULL);
+    ASSERT_EQ(buffer_get(id)->view.word_wrap, 1);
+
+    buffers_free();
+}
+
 BEGIN_TEST_SUITE("Buffer Management")
     RUN_TEST(buffer_init);
     RUN_TEST(buffer_create);
@@ -327,4 +362,6 @@ BEGIN_TEST_SUITE("Buffer Management")
     RUN_TEST(buffer_limit);
     RUN_TEST(buffer_tabs_rendering);
     RUN_TEST(buffer_command_workflow);
+    RUN_TEST(buffer_create_nonexistent_file);
+    RUN_TEST(buffer_create_inherits_word_wrap);
 END_TEST_SUITE()

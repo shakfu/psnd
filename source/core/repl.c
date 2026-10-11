@@ -480,6 +480,7 @@ char *repl_readline(editor_ctx_t *syntax_ctx, ReplLineEditor *ed, const char *pr
     while (1) {
         fflush(stdout); /* Ensure output is flushed before blocking read */
         int c = terminal_read_key(STDIN_FILENO);
+        if (c == -1) return NULL;  /* Input error: treat as EOF. */
 
         if (c == ENTER) {
             /* Submit line */

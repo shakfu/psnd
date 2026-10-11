@@ -15,6 +15,9 @@
 #include "loki/terminal.h"
 #include <string.h>
 #include <stdlib.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 /* ============================================================================
  * Screen Buffer Tests
@@ -307,6 +310,52 @@ TEST(terminal_buffer_newlines) {
     terminal_buffer_free(&ab);
 }
 
+#ifndef _WIN32
+/* Feed bytes through a pipe whose write end is closed, so reads past the
+ * data return 0 (the same value raw mode gives on a VTIME timeout). */
+static int key_pipe(const char *bytes, size_t n) {
+    int fds[2];
+    if (pipe(fds) != 0) return -1;
+    if (write(fds[1], bytes, n) != (ssize_t)n) { close(fds[0]); close(fds[1]); return -1; }
+    close(fds[1]);
+    return fds[0];
+}
+
+/* An unrecognised CSI sequence used to loop with c == ESC and swallow the
+ * next two keystrokes. */
+TEST(read_key_unknown_sequence_keeps_following_keys) {
+    int fd = key_pipe("\x1b[Zab", 5);
+    ASSERT_TRUE(fd >= 0);
+    ASSERT_EQ(terminal_read_key(fd), ESC);
+    ASSERT_EQ(terminal_read_key(fd), 'a');
+    ASSERT_EQ(terminal_read_key(fd), 'b');
+    close(fd);
+}
+
+TEST(read_key_known_sequence) {
+    int fd = key_pipe("\x1b[Ax", 4);
+    ASSERT_TRUE(fd >= 0);
+    ASSERT_EQ(terminal_read_key(fd), ARROW_UP);
+    ASSERT_EQ(terminal_read_key(fd), 'x');
+    close(fd);
+}
+
+/* Closed input (hangup, closed pipe) reads 0 bytes at once, forever. It
+ * must end the read instead of being mistaken for an idle timeout. */
+TEST(read_key_returns_minus_one_on_closed_input) {
+    int fd = key_pipe("x", 1);
+    ASSERT_TRUE(fd >= 0);
+    ASSERT_EQ(terminal_read_key(fd), 'x');
+    ASSERT_EQ(terminal_read_key(fd), -1);
+    close(fd);
+}
+
+/* A read error is reported to the caller instead of calling exit(). */
+TEST(read_key_returns_minus_one_on_error) {
+    ASSERT_EQ(terminal_read_key(-1), -1);
+}
+#endif
+
 BEGIN_TEST_SUITE("Terminal Buffer Operations")
     /* Basic buffer operations */
     RUN_TEST(terminal_buffer_init);
@@ -340,4 +389,10 @@ BEGIN_TEST_SUITE("Terminal Buffer Operations")
     RUN_TEST(terminal_buffer_free_null_safe);
     RUN_TEST(terminal_buffer_append_after_free);
     RUN_TEST(terminal_buffer_newlines);
+#ifndef _WIN32
+    RUN_TEST(read_key_unknown_sequence_keeps_following_keys);
+    RUN_TEST(read_key_known_sequence);
+    RUN_TEST(read_key_returns_minus_one_on_closed_input);
+    RUN_TEST(read_key_returns_minus_one_on_error);
+#endif
 END_TEST_SUITE()

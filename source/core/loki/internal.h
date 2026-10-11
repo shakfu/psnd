@@ -199,6 +199,7 @@ typedef struct EditorView {
     int cmd_cursor_pos;       /* Cursor position in command */
     int cmd_history_index;    /* Current history position */
     int pending_prefix;       /* Pending prefix key (e.g., CTRL_X for Ctrl-X sequences), 0 if none */
+    int quit_times;           /* Remaining Ctrl-Q presses needed to quit a dirty buffer */
 
     /* Status */
     char statusmsg[80];       /* Status message */
@@ -314,9 +315,34 @@ void editor_insert_char(editor_ctx_t *ctx, int c);
 void editor_insert_newline(editor_ctx_t *ctx);
 void editor_del_char(editor_ctx_t *ctx);
 
-/* Row management (test helpers) */
+/* Run the Lua loki.highlight_row hook on a freshly highlighted row. */
+void lua_apply_highlight_row(editor_ctx_t *ctx, t_erow *row, int default_ran);
+
+/* Ctrl-Q presses required to abandon a modified buffer. */
+#define KILO_QUIT_TIMES 3
+
+/* Row management */
 void editor_insert_row(editor_ctx_t *ctx, int at, char *s, size_t len);
 void editor_del_row(editor_ctx_t *ctx, int at);
+void editor_row_insert_char(editor_ctx_t *ctx, t_erow *row, int at, int c);
+void editor_row_del_char(editor_ctx_t *ctx, t_erow *row, int at);
+void editor_row_append_string(editor_ctx_t *ctx, t_erow *row, char *s, size_t len);
+
+/* Write that deliberately ignores failure (terminal escape sequences: there
+ * is nothing useful to do if the terminal has gone away). */
+#ifdef _WIN32
+#include <io.h>
+static inline void write_ignore_result(int fd, const void *buf, size_t n) {
+    int r = _write(fd, buf, (unsigned int)n);
+    (void)r;
+}
+#else
+#include <unistd.h>
+static inline void write_ignore_result(int fd, const void *buf, size_t n) {
+    ssize_t r = write(fd, buf, n);
+    (void)r;
+}
+#endif
 
 /* Screen rendering */
 void editor_refresh_screen(editor_ctx_t *ctx);
@@ -342,7 +368,7 @@ int hl_name_to_code(const char *name);
 int is_separator(int c, char *separators);
 
 /* Terminal and input functions are now in loki_terminal.h */
-void editor_process_keypress(editor_ctx_t *ctx, int fd);
+int editor_process_keypress(editor_ctx_t *ctx, int fd);
 
 /* Cursor movement */
 void editor_move_cursor(editor_ctx_t *ctx, int key);

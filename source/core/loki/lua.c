@@ -146,10 +146,15 @@ static int lua_loki_stream_text(lua_State *L) {
 
     const char *text = luaL_checkstring(L, 1);
 
-    /* Move to end of file */
+    /* Move to end of file. cy/cx are screen-relative, so place the last
+     * row on screen first; otherwise a scrolled view inserts past the end. */
     if (ctx->model.numrows > 0) {
-        ctx->view.cy = ctx->model.numrows - 1;
-        ctx->view.cx = ctx->model.row[ctx->view.cy].size;
+        int last = ctx->model.numrows - 1;
+        ctx->view.rowoff = last >= ctx->view.screenrows && ctx->view.screenrows > 0
+                         ? last - ctx->view.screenrows + 1 : 0;
+        ctx->view.cy = last - ctx->view.rowoff;
+        ctx->view.coloff = 0;
+        ctx->view.cx = ctx->model.row[last].size;
     }
 
     /* Insert the text */
@@ -160,8 +165,12 @@ static int lua_loki_stream_text(lua_State *L) {
     /* Scroll to bottom */
     if (ctx->model.numrows > ctx->view.screenrows) {
         ctx->view.rowoff = ctx->model.numrows - ctx->view.screenrows;
+    } else {
+        ctx->view.rowoff = 0;
     }
-    ctx->view.cy = ctx->model.numrows - 1;
+    /* cy is screen-relative, and an empty buffer must not leave it negative. */
+    ctx->view.cy = ctx->model.numrows - 1 - ctx->view.rowoff;
+    if (ctx->view.cy < 0) ctx->view.cy = 0;
 
     /* Refresh screen immediately */
     editor_refresh_screen(ctx);
@@ -407,8 +416,9 @@ static int lua_ex_command_handler(editor_ctx_t *ctx, const char *args) {
         return 0;
     }
 
-    /* Get return value (boolean for success/failure) */
-    int result = lua_toboolean(L, -1);
+    /* Get return value. A handler that returns nothing (nil) has succeeded;
+     * only an explicit false means failure. */
+    int result = lua_isnil(L, -1) ? 1 : lua_toboolean(L, -1);
     lua_pop(L, 2);  /* Pop result and table */
     return result;
 }
@@ -2950,6 +2960,20 @@ lua_State *loki_lua_bootstrap(editor_ctx_t *ctx, const struct loki_lua_opts *opt
     /* Package library for require() - needed for .psnd modules */
     luaL_requiref(L, LUA_LOADLIBNAME, luaopen_package, 1);
     lua_pop(L, 1);
+
+    /* No native code: package.loadlib and the C searchers load shared
+     * libraries, which would bypass every restriction above. */
+    lua_getglobal(L, "package");
+    lua_pushnil(L);
+    lua_setfield(L, -2, "loadlib");
+    lua_pushliteral(L, "");
+    lua_setfield(L, -2, "cpath");
+    lua_getfield(L, -1, "searchers");   /* preload, Lua, C, all-in-one */
+    lua_pushnil(L);
+    lua_rawseti(L, -2, 4);
+    lua_pushnil(L);
+    lua_rawseti(L, -2, 3);
+    lua_pop(L, 2);
 
     /* Skipped (dangerous):
      * - os: os.execute(), os.remove(), os.rename(), os.exit()

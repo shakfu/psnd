@@ -65,57 +65,62 @@ int cmd_substitute(editor_ctx_t *ctx, const char *pattern) {
     }
 
     /* Perform substitution on current line */
-    if (ctx->view.cy >= ctx->model.numrows) {
+    int filerow = ctx->view.rowoff + ctx->view.cy;
+    if (filerow < 0 || filerow >= ctx->model.numrows) {
         editor_set_status_msg(ctx, "No line to substitute");
         return 0;
     }
 
-    t_erow *row = &ctx->model.row[ctx->view.cy];
+    t_erow *row = &ctx->model.row[filerow];
     char *line = row->chars;
     int line_len = row->size;
 
-    /* Build new line with substitutions */
-    char new_line[4096] = {0};
-    int new_line_len = 0;
+    /* First pass: count matches so the output can be sized exactly. A fixed
+     * buffer here used to truncate long lines and lose their tails. */
     int count = 0;
-    int i = 0;
-
-    while (i < line_len && new_line_len < 4090) {
-        /* Check for match at current position */
-        if (i + old_len <= line_len && strncmp(line + i, old_str, old_len) == 0) {
-            /* Found a match - substitute */
-            if (new_line_len + new_len < 4090) {
-                memcpy(new_line + new_line_len, new_str, new_len);
-                new_line_len += new_len;
-                i += old_len;
-                count++;
-                if (!global) {
-                    /* Copy rest of line after first substitution */
-                    int remaining = line_len - i;
-                    if (new_line_len + remaining < 4096) {
-                        memcpy(new_line + new_line_len, line + i, remaining);
-                        new_line_len += remaining;
-                    }
-                    break;
-                }
-            } else {
-                break;  /* Output buffer full */
-            }
+    for (int i = 0; i + old_len <= line_len; ) {
+        if (strncmp(line + i, old_str, old_len) == 0) {
+            count++;
+            i += old_len;
+            if (!global) break;
         } else {
-            /* No match - copy character */
-            new_line[new_line_len++] = line[i++];
+            i++;
         }
     }
-    new_line[new_line_len] = '\0';
 
     if (count == 0) {
         editor_set_status_msg(ctx, "Pattern not found: %s", old_str);
         return 0;
     }
 
-    /* Update the row */
+    size_t out_cap = (size_t)line_len + (size_t)count * (size_t)new_len + 1;
+    char *new_line = malloc(out_cap);
+    if (!new_line) {
+        editor_set_status_msg(ctx, "Out of memory");
+        return 0;
+    }
+
+    /* Second pass: build the result. */
+    int new_line_len = 0;
+    int done = 0;
+    int i = 0;
+    while (i < line_len) {
+        if (!done && i + old_len <= line_len &&
+            strncmp(line + i, old_str, old_len) == 0) {
+            memcpy(new_line + new_line_len, new_str, new_len);
+            new_line_len += new_len;
+            i += old_len;
+            if (!global) done = 1;
+        } else {
+            new_line[new_line_len++] = line[i++];
+        }
+    }
+    new_line[new_line_len] = '\0';
+
+    /* Update the row. Hand over the buffer we already own rather than
+     * freeing the old text before a strdup that might fail. */
     free(row->chars);
-    row->chars = strdup(new_line);
+    row->chars = new_line;
     row->size = new_line_len;
 
     /* Update render */

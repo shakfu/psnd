@@ -13,7 +13,8 @@
 /* Process a single keypress with modal editing support.
  * This is the main entry point for all keyboard input.
  * Handles mode switching and dispatches to appropriate mode handler. */
-void modal_process_keypress(editor_ctx_t *ctx, int fd);
+/* Returns -1 if the input is closed or failed, 0 otherwise. */
+int modal_process_keypress(editor_ctx_t *ctx, int fd);
 
 /* ============================================================================
  * Keybind Command Handlers

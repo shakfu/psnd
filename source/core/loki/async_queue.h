@@ -126,7 +126,10 @@ typedef struct AsyncEvent {
         } custom;
     } data;
 
-    void *heap_data;                /* Non-NULL if data on heap, freed on pop */
+    void *heap_data;                /* Non-NULL if data on heap, freed on pop.
+                                     * Always NULL in an event returned by
+                                     * async_queue_peek(), which does not
+                                     * transfer ownership. */
 } AsyncEvent;
 
 /* ============================================================================

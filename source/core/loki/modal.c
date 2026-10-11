@@ -57,7 +57,6 @@
 #endif
 
 /* Number of times CTRL-Q must be pressed before actually quitting */
-#define KILO_QUIT_TIMES 3
 
 /* Helper: check if a filename has .csd extension */
 static int is_csd_file(const char *filename) {
@@ -65,14 +64,6 @@ static int is_csd_file(const char *filename) {
     size_t len = strlen(filename);
     if (len < 4) return 0;
     return strcmp(filename + len - 4, ".csd") == 0;
-}
-
-/* Helper: check if a filename has .joy extension */
-static int is_joy_file(const char *filename) {
-    if (!filename) return 0;
-    size_t len = strlen(filename);
-    if (len < 4) return 0;
-    return strcmp(filename + len - 4, ".joy") == 0;
 }
 
 /* Try to dispatch a keypress to a Lua keymap callback.
@@ -116,6 +107,52 @@ static int try_lua_keymap(editor_ctx_t *ctx, const char *mode, int key) {
     return 1;  /* Handled by Lua */
 }
 
+/* Dispatch a normal-mode key to commands registered from Lua. A global
+ * loki_process_normal_key(key) takes precedence; without one, the key is
+ * looked up in loki.register_command()'s _loki_commands table. Returns 1 if
+ * Lua handled the key. */
+static int try_lua_normal_command(editor_ctx_t *ctx, int key) {
+    lua_State *L = ctx_L(ctx);
+    if (!L) return 0;
+
+    lua_getglobal(L, "loki_process_normal_key");
+    if (!lua_isfunction(L, -1)) {
+        lua_pop(L, 1);
+        if (key < 32 || key > 126) return 0;   /* registry keys are printable */
+
+        lua_getglobal(L, "_loki_commands");
+        if (!lua_istable(L, -1)) {
+            lua_pop(L, 1);
+            return 0;
+        }
+        char name[2] = { (char)key, '\0' };
+        lua_getfield(L, -1, name);
+        if (!lua_isfunction(L, -1)) {
+            lua_pop(L, 2);
+            return 0;
+        }
+        if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+            const char *err = lua_tostring(L, -1);
+            editor_set_status_msg(ctx, "Command error: %s", err ? err : "(no message)");
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);  /* _loki_commands */
+        return 1;
+    }
+
+    lua_pushinteger(L, key);
+    if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
+        const char *err = lua_tostring(L, -1);
+        editor_set_status_msg(ctx, "Lua error: %s", err ? err : "(no message)");
+        lua_pop(L, 1);
+        return 0;
+    }
+
+    int handled = lua_toboolean(L, -1);
+    lua_pop(L, 1);
+    return handled;
+}
+
 /* Helper: Check if a line is empty (blank or whitespace only) */
 static int is_empty_line(editor_ctx_t *ctx, int row) {
     if (row < 0 || row >= ctx->model.numrows) return 1;
@@ -143,8 +180,9 @@ static void move_to_next_empty_line(editor_ctx_t *ctx) {
         /* Found an empty line - this is where we stop */
         filerow = row;
     } else {
-        /* No empty line found, go to end of file */
-        filerow = ctx->model.numrows - 1;
+        /* No empty line found, go to end of file. Clamp: an empty buffer has
+         * numrows == 0, and a negative filerow poisons rowoff/cy. */
+        filerow = ctx->model.numrows > 0 ? ctx->model.numrows - 1 : 0;
     }
 
     /* Update cursor position */
@@ -295,6 +333,11 @@ static void process_normal_mode(editor_ctx_t *ctx, int fd, int c) {
         return;  /* Handled by Lua callback */
     }
 
+    /* Then commands registered via modal.register_command(). */
+    if (try_lua_normal_command(ctx, c)) {
+        return;  /* Handled by Lua callback */
+    }
+
     switch(c) {
         case 'h': editor_move_cursor(ctx, ARROW_LEFT); break;
         case 'j': editor_move_cursor(ctx, ARROW_DOWN); break;
@@ -314,11 +357,20 @@ static void process_normal_mode(editor_ctx_t *ctx, int fd, int c) {
             undo_break_group(ctx);  /* Break undo group on mode change */
             ctx->view.mode = MODE_INSERT;
             break;
-        case 'a':
+        case 'a': {
             undo_break_group(ctx);  /* Break undo group on mode change */
-            editor_move_cursor(ctx, ARROW_RIGHT);
+            /* Step right to append after the cursor, but not past the end of
+             * the line: ARROW_RIGHT wraps to the next row there, which put
+             * the insertion point on the wrong line. */
+            int arow = ctx->view.rowoff + ctx->view.cy;
+            int acol = ctx->view.coloff + ctx->view.cx;
+            if (arow >= 0 && arow < ctx->model.numrows &&
+                acol < ctx->model.row[arow].size) {
+                editor_move_cursor(ctx, ARROW_RIGHT);
+            }
             ctx->view.mode = MODE_INSERT;
             break;
+        }
         case 'o':
             /* Insert line below and enter insert mode */
             if (ctx->model.numrows > 0) {
@@ -534,8 +586,8 @@ static void process_insert_mode(editor_ctx_t *ctx, int fd, int c) {
             /* Start selection if not active */
             if (!ctx->view.sel_active) {
                 ctx->view.sel_active = 1;
-                ctx->view.sel_start_x = ctx->view.cx;
-                ctx->view.sel_start_y = ctx->view.cy;
+                ctx->view.sel_start_x = ctx->view.coloff + ctx->view.cx;
+                ctx->view.sel_start_y = ctx->view.rowoff + ctx->view.cy;
             }
             /* Move cursor */
             if (c == SHIFT_ARROW_UP) editor_move_cursor(ctx, ARROW_UP);
@@ -543,8 +595,8 @@ static void process_insert_mode(editor_ctx_t *ctx, int fd, int c) {
             else if (c == SHIFT_ARROW_LEFT) editor_move_cursor(ctx, ARROW_LEFT);
             else if (c == SHIFT_ARROW_RIGHT) editor_move_cursor(ctx, ARROW_RIGHT);
             /* Update selection end */
-            ctx->view.sel_end_x = ctx->view.cx;
-            ctx->view.sel_end_y = ctx->view.cy;
+            ctx->view.sel_end_x = ctx->view.coloff + ctx->view.cx;
+            ctx->view.sel_end_y = ctx->view.rowoff + ctx->view.cy;
             break;
 
         default:
@@ -648,8 +700,9 @@ static void process_visual_mode(editor_ctx_t *ctx, int fd, int c) {
  *
  * For non-terminal input sources, use modal_process_event() directly.
  */
-void modal_process_keypress(editor_ctx_t *ctx, int fd) {
+int modal_process_keypress(editor_ctx_t *ctx, int fd) {
     int c = terminal_read_key(fd);
+    if (c == -1) return -1;  /* Input closed or failed. */
 
     /* Handle pending Ctrl-X prefix - read second key immediately from terminal */
     if (ctx->view.pending_prefix == CTRL_X) {
@@ -657,7 +710,7 @@ void modal_process_keypress(editor_ctx_t *ctx, int fd) {
          * Convert to event and let modal_process_event() handle it. */
         EditorEvent ev = event_from_keycode(c);
         modal_process_event(ctx, &ev);
-        return;
+        return 0;
     }
 
     /* Handle pending Ctrl-W prefix - read second key immediately from terminal */
@@ -666,7 +719,7 @@ void modal_process_keypress(editor_ctx_t *ctx, int fd) {
          * Convert to event and let modal_process_event() handle it. */
         EditorEvent ev = event_from_keycode(c);
         modal_process_event(ctx, &ev);
-        return;
+        return 0;
     }
 
     /* Intercept CTRL_F for interactive find (requires terminal I/O).
@@ -676,13 +729,14 @@ void modal_process_keypress(editor_ctx_t *ctx, int fd) {
         t_lua_repl *repl = ctx_repl(ctx);
         if (!repl || !repl->active) {
             editor_find(ctx, fd);
-            return;
+            return 0;
         }
     }
 
     /* Convert keypress to event and delegate to event handler */
     EditorEvent ev = event_from_keycode(c);
     modal_process_event(ctx, &ev);
+    return 0;
 }
 
 /* ============================================================================
@@ -1035,7 +1089,7 @@ void modal_process_event(editor_ctx_t *ctx, const EditorEvent *event) {
 
         case EVENT_RESIZE:
             /* Update screen dimensions */
-            ctx->view.screenrows = event->data.resize.rows - STATUS_ROWS;
+            ctx->view.screenrows = event->data.resize.rows;  /* text rows */
             ctx->view.screencols = event->data.resize.cols;
             editor_refresh_screen(ctx);
             return;
@@ -1105,14 +1159,15 @@ void modal_process_event(editor_ctx_t *ctx, const EditorEvent *event) {
     int c = event_to_keycode(event);
     if (c == 0) return;
 
-    /* Static quit counter (must persist across calls) */
-    static int quit_times = KILO_QUIT_TIMES;
+    /* The quit counter lives on the context (ctx->view.quit_times). It used
+     * to be a function-level static, shared by every editor context and never
+     * reset between sessions. */
 
     /* Handle pending Ctrl-X prefix sequence */
     if (ctx->view.pending_prefix == CTRL_X) {
         ctx->view.pending_prefix = 0;  /* Clear prefix */
         if (handle_ctrl_x_command(ctx, c)) {
-            quit_times = KILO_QUIT_TIMES;
+            ctx->view.quit_times = KILO_QUIT_TIMES;
             return;
         }
         /* If not a valid Ctrl-X command, fall through to normal processing */
@@ -1122,7 +1177,7 @@ void modal_process_event(editor_ctx_t *ctx, const EditorEvent *event) {
     if (ctx->view.pending_prefix == CTRL_W) {
         ctx->view.pending_prefix = 0;  /* Clear prefix */
         if (handle_ctrl_w_command(ctx, c)) {
-            quit_times = KILO_QUIT_TIMES;
+            ctx->view.quit_times = KILO_QUIT_TIMES;
             return;
         }
         /* If not a valid Ctrl-W command, fall through to normal processing */
@@ -1136,10 +1191,10 @@ void modal_process_event(editor_ctx_t *ctx, const EditorEvent *event) {
 
     /* Handle quit globally (works in all modes) */
     if (c == CTRL_Q) {
-        if (ctx->model.dirty && quit_times) {
+        if (ctx->model.dirty && ctx->view.quit_times) {
             editor_set_status_msg(ctx, "WARNING!!! File has unsaved changes. "
-                "Press Ctrl-Q %d more times to quit.", quit_times);
-            quit_times--;
+                "Press Ctrl-Q %d more times to quit.", ctx->view.quit_times);
+            ctx->view.quit_times--;
             return;
         }
         exit(0);
@@ -1148,7 +1203,7 @@ void modal_process_event(editor_ctx_t *ctx, const EditorEvent *event) {
     /* Try configurable keybindings first (from config.toml)
      * This allows users to override default keybindings */
     if (keybind_try_handle(ctx, 0, c)) {
-        quit_times = KILO_QUIT_TIMES;
+        ctx->view.quit_times = KILO_QUIT_TIMES;
         return;
     }
 
@@ -1162,21 +1217,21 @@ void modal_process_event(editor_ctx_t *ctx, const EditorEvent *event) {
         } else {
             editor_set_status_msg(ctx, "Error: Could not create buffer (max %d buffers)", MAX_BUFFERS);
         }
-        quit_times = KILO_QUIT_TIMES;
+        ctx->view.quit_times = KILO_QUIT_TIMES;
         return;
     }
 
     /* Handle Ctrl-X prefix */
     if (c == CTRL_X) {
         ctx->view.pending_prefix = CTRL_X;
-        quit_times = KILO_QUIT_TIMES;
+        ctx->view.quit_times = KILO_QUIT_TIMES;
         return;
     }
 
     /* Handle Ctrl-W prefix */
     if (c == CTRL_W) {
         ctx->view.pending_prefix = CTRL_W;
-        quit_times = KILO_QUIT_TIMES;
+        ctx->view.quit_times = KILO_QUIT_TIMES;
         return;
     }
 
@@ -1199,7 +1254,7 @@ void modal_process_event(editor_ctx_t *ctx, const EditorEvent *event) {
             break;
     }
 
-    quit_times = KILO_QUIT_TIMES; /* Reset it to the original value. */
+    ctx->view.quit_times = KILO_QUIT_TIMES; /* Reset it to the original value. */
 }
 
 /* ============================================================================

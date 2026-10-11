@@ -13,6 +13,8 @@
 #include "loki/internal.h"
 #include "loki/syntax.h"
 #include "loki/terminal.h"
+#include "loki/session.h"
+#include "loki/event.h"
 #include <string.h>
 
 /* Test editor context initialization */
@@ -227,6 +229,23 @@ TEST(window_resize_flag_initialized) {
     ASSERT_EQ(terminal_host_resize_pending(&host), 0);
 }
 
+/* EVENT_RESIZE carries text rows for every host. The session used to be
+ * inconsistent with modal_process_event about subtracting the status rows. */
+TEST(session_resize_uses_text_rows) {
+    EditorConfig config = {0};
+    config.rows = 24;
+    config.cols = 80;
+    EditorSession *session = editor_session_new(&config);
+    ASSERT_NOT_NULL(session);
+
+    EditorEvent ev = event_resize(30, 100);
+    ASSERT_EQ(editor_session_handle_event(session, &ev), 0);
+    ASSERT_EQ(editor_session_get_ctx(session)->view.screenrows, 30);
+    ASSERT_EQ(editor_session_get_ctx(session)->view.screencols, 100);
+
+    editor_session_free(session);
+}
+
 BEGIN_TEST_SUITE("Core Editor Functions")
     RUN_TEST(editor_ctx_init_initializes_all_fields);
     RUN_TEST(is_separator_detects_whitespace);
@@ -238,4 +257,5 @@ BEGIN_TEST_SUITE("Core Editor Functions")
     RUN_TEST(dirty_flag_set_on_modification);
     RUN_TEST(mode_switching_works);
     RUN_TEST(window_resize_flag_initialized);
+    RUN_TEST(session_resize_uses_text_rows);
 END_TEST_SUITE()

@@ -205,6 +205,7 @@ int picker_select_blocking(editor_ctx_t *ctx, int fd,
     while (!blocking_state.done) {
         editor_refresh_screen(ctx);
         int key = terminal_read_key(fd);
+        if (key == -1) key = ESC;  /* Input error: close the picker. */
         picker_handle_key(ctx, key);
     }
 

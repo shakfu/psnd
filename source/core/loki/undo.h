@@ -17,6 +17,7 @@ typedef enum {
     UNDO_DELETE_CHAR,    /* Delete single character */
     UNDO_INSERT_LINE,    /* Insert newline (split line) */
     UNDO_DELETE_LINE,    /* Delete newline (merge lines) */
+    UNDO_DELETE_BLOCK,   /* Delete a multi-character/multi-line range */
 } undo_op_type_t;
 
 /* Single undo operation */
@@ -67,6 +68,11 @@ void undo_record_insert_char(editor_ctx_t *ctx, int row, int col, char ch);
 void undo_record_delete_char(editor_ctx_t *ctx, int row, int col, char ch);
 void undo_record_insert_line(editor_ctx_t *ctx, int row, int col, const char *content, int length);
 void undo_record_delete_line(editor_ctx_t *ctx, int row, int col, const char *content, int length);
+
+/* Record deletion of a text range starting at (row, col). 'content' is the
+ * deleted text, with embedded '\n' for row boundaries. Recorded as one entry
+ * so a large selection delete does not flood the undo ring. */
+void undo_record_delete_block(editor_ctx_t *ctx, int row, int col, const char *content, int length);
 
 /* Force start of new undo group (e.g., after mode change, after delay) */
 void undo_break_group(editor_ctx_t *ctx);

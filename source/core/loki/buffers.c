@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <errno.h>
 
 /* Forward declarations */
 void editor_insert_row(editor_ctx_t *ctx, int at, char *s, size_t len);
@@ -124,6 +125,8 @@ int buffer_manager_init(buffer_manager_t *mgr, editor_ctx_t *initial_ctx) {
 
     /* Copy display settings */
     first->ctx.view.line_numbers = initial_ctx->view.line_numbers;
+    first->ctx.view.word_wrap = initial_ctx->view.word_wrap;
+    first->ctx.view.mode = initial_ctx->view.mode;
 
     /* Transfer ownership of buffer content from initial_ctx to first buffer.
      * We take ownership of the pointers and NULL them in initial_ctx to prevent
@@ -192,17 +195,26 @@ int buffer_create_in(buffer_manager_t *mgr, const char *filename) {
         memcpy(buf->ctx.view.colors, template_ctx->view.colors, sizeof(buf->ctx.view.colors));
         /* Copy display settings */
         buf->ctx.view.line_numbers = template_ctx->view.line_numbers;
+        buf->ctx.view.word_wrap = template_ctx->view.word_wrap;
     } else if (mgr->shared_lua_host) {
         buf->ctx.lua_host = mgr->shared_lua_host;
     }
 
-    /* Open file if provided */
+    /* Open file if provided. editor_open() returns -1 with errno ENOENT for
+     * a file that does not exist yet; that is a new, empty buffer bound to
+     * the name, the way ':e newfile' should behave. */
     if (filename) {
+        errno = 0;
         if (editor_open(&buf->ctx, (char *)filename) != 0) {
-            /* Failed to open file - clean up */
-            editor_ctx_free(&buf->ctx);
-            buf->active = 0;
-            return -1;
+            if (errno == ENOENT) {
+                editor_insert_row(&buf->ctx, 0, "", 0);
+                buf->ctx.model.dirty = 0;
+            } else {
+                /* The file exists but could not be loaded (e.g. binary). */
+                editor_ctx_free(&buf->ctx);
+                buf->active = 0;
+                return -1;
+            }
         }
     } else {
         /* Empty buffer - insert one empty row so it displays properly */

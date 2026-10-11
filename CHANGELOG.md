@@ -22,11 +22,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Security
+
+- **The Lua sandbox could load native code**: it kept `package.loadlib` and the C searchers, so `require` of a `.so` shipped in a project bypassed the removed `os`/`io` libraries. Both are now removed and `package.cpath` is empty.
+
+### Changed
+
+- **26 editor-core files are now byte-identical with [loki](https://github.com/shakfu/loki)**: `json`, `undo`, `selection`, `search`, `indent`, `jsonrpc`, `host`, `command/{file,goto,substitute}.c`, `terminal_posix.c` and others. loki's `make check-sync` reports drift. Changes to these files should stay free of psnd-specific code.
+
+- **Stricter JSON parsing**: `json_parse` now rejects trailing content, literals with a suffix (`trueX`) and a bare `-`. Integer overflow saturates to `INT_MAX`.
+
+- **Ex-command argument counts are enforced**: `:goto 1 2` and `:q extra` now fail; `max_args` was never checked. `:w`, `:e`, `:wq`, `:x` and `:export` take the rest of the line, so paths with spaces still work.
+
+- **`:e newfile` opens an empty buffer bound to the name** instead of failing.
+
+- **`EVENT_RESIZE.rows` is the text area for every host**: the terminal host now subtracts `STATUS_ROWS` itself, matching the web and webview hosts, which already sent text rows. The session previously gave terminal frontends two rows too many.
+
 ### Added
 
 - **`make test-asan`**: runs the `test-tsf` suite with `PSND_ENABLE_ASAN` in `build-asan/`, so the cached option stays out of `make test`. ASan builds skip stripping `psnd`, so ASan stack traces show function names. All 83 tests pass under it.
 
 ### Fixed
+
+- **A hung-up terminal could leave the editor spinning**: with SIGHUP ignored, `read()` on a hung-up tty returns 0 at once, forever, which looked like raw mode's 100 ms idle timeout. `terminal_read_key` now checks `poll()` for `POLLHUP` after a 0-byte read and returns -1. `editor_process_keypress` and `modal_process_keypress` now return that -1, and the editor loop and terminal host stop on it.
+
+- **`loki.register_command` callbacks were never called without a Lua dispatcher**: they went into `_loki_commands`, which only loki's `modal.lua` read, and psnd has no such module. The C hook now dispatches from that table when no `loki_process_normal_key` global is defined.
+
+- **Editor-core bugs ported from loki 0.5.1**, each with a regression test:
+  - The editor exited after about 100 seconds idle: raw mode makes `read()` return 0 on every 100 ms timeout, and 1000 of those were treated as a closed stdin.
+  - An unrecognised escape sequence (`ESC[Z`, Ctrl-arrows) swallowed the next two keystrokes.
+  - Undo and redo of a line split or merge lost or duplicated text. Visual-mode deletion was not undoable at all; it is now one undo entry.
+  - `view.cy` is screen-relative, but `:s`, `:goto`, auto-indent, electric dedent, shift-arrow selection and `loki.stream_text` used it as a file row once the view scrolled.
+  - `:e <file>` appended the file to the current buffer and marked the mixture saved.
+  - `:s` truncated lines longer than 4096 bytes.
+  - Selecting more than 1024 empty rows overflowed the copy buffer in `get_selection_text` and in clipboard copy.
+  - `editor_del_row` incremented the indices of the rows after it instead of decrementing them.
+  - `}` on an empty buffer set `rowoff` to -1, and a narrow terminal hung the welcome screen.
+  - `a` at end of line moved the cursor to the next line.
+  - Command feedback (`3L written`, `Unknown command`) was erased before it was shown.
+  - `undo_free` leaked every entry once the ring had wrapped, and the undo memory limit was never enforced.
+  - `loki.highlight_row` and `modal.register_command` dispatch were never called from C.
+  - The Ctrl-Q counter was a function static shared by every buffer.
+  - A REPL completion callback could outlive its editor, and the async queue destroyed its mutex before refusing new pushes.
 
 - **Deleting a character read one byte past the row**: `editor_row_del_char` moved `size-at+1` bytes from `at+1`, one more than the row holds with its terminator. Delete, undo, selection delete and electric indent all reached it; ASan reported it in five editor test suites.
 

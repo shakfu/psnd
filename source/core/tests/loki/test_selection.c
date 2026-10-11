@@ -12,6 +12,7 @@
 #include "loki/core.h"
 #include "loki/internal.h"
 #include "loki/selection.h"
+#include "loki/undo.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -523,6 +524,122 @@ TEST(selection_zero_width) {
     editor_ctx_free(&ctx);
 }
 
+/* ============================================================================
+ * Undo of visual-mode deletion (regression: deletes were never recorded)
+ * ============================================================================ */
+
+/* Deleting a selection inside one line must be undoable. */
+TEST(delete_selection_single_line_is_undoable) {
+    editor_ctx_t ctx;
+    init_single_line_ctx(&ctx, "hello world");
+    undo_init(&ctx, 100, 1024 * 1024);
+
+    ctx.view.sel_active = 1;
+    ctx.view.sel_start_y = 0; ctx.view.sel_start_x = 5;
+    ctx.view.sel_end_y = 0;   ctx.view.sel_end_x = 11;
+
+    int n = delete_selection(&ctx);
+    ASSERT_EQ(n, 6);
+    ASSERT_STR_EQ(ctx.model.row[0].chars, "hello");
+
+    ASSERT_EQ(undo_perform(&ctx), 1);
+    ASSERT_EQ(ctx.model.numrows, 1);
+    ASSERT_STR_EQ(ctx.model.row[0].chars, "hello world");
+
+    undo_free(&ctx);
+    editor_ctx_free(&ctx);
+}
+
+/* A multi-line selection must round-trip through undo, rows and all. */
+TEST(delete_selection_multiline_is_undoable) {
+    editor_ctx_t ctx;
+    const char *lines[] = {"first line", "second line", "third line"};
+    init_multiline_ctx(&ctx, 3, lines);
+    undo_init(&ctx, 100, 1024 * 1024);
+
+    /* Select from row 0 col 5 through row 2 col 5. */
+    ctx.view.sel_active = 1;
+    ctx.view.sel_start_y = 0; ctx.view.sel_start_x = 5;
+    ctx.view.sel_end_y = 2;   ctx.view.sel_end_x = 5;
+
+    delete_selection(&ctx);
+    ASSERT_EQ(ctx.model.numrows, 1);
+    ASSERT_STR_EQ(ctx.model.row[0].chars, "first line");
+
+    ASSERT_EQ(undo_perform(&ctx), 1);
+    ASSERT_EQ(ctx.model.numrows, 3);
+    ASSERT_STR_EQ(ctx.model.row[0].chars, "first line");
+    ASSERT_STR_EQ(ctx.model.row[1].chars, "second line");
+    ASSERT_STR_EQ(ctx.model.row[2].chars, "third line");
+
+    undo_free(&ctx);
+    editor_ctx_free(&ctx);
+}
+
+/* Redo must re-apply the same deletion. */
+TEST(delete_selection_multiline_redo) {
+    editor_ctx_t ctx;
+    const char *lines[] = {"first line", "second line", "third line"};
+    init_multiline_ctx(&ctx, 3, lines);
+    undo_init(&ctx, 100, 1024 * 1024);
+
+    ctx.view.sel_active = 1;
+    ctx.view.sel_start_y = 0; ctx.view.sel_start_x = 5;
+    ctx.view.sel_end_y = 2;   ctx.view.sel_end_x = 5;
+
+    delete_selection(&ctx);
+    ASSERT_EQ(undo_perform(&ctx), 1);
+    ASSERT_EQ(ctx.model.numrows, 3);
+
+    ASSERT_EQ(redo_perform(&ctx), 1);
+    ASSERT_EQ(ctx.model.numrows, 1);
+    ASSERT_STR_EQ(ctx.model.row[0].chars, "first line");
+
+    undo_free(&ctx);
+    editor_ctx_free(&ctx);
+}
+
+/* The reported count must be the bytes actually removed. The end row's tail
+ * is preserved, so it must not be counted. */
+TEST(delete_selection_reports_exact_count) {
+    editor_ctx_t ctx;
+    const char *lines[] = {"abcde", "fghij"};
+    init_multiline_ctx(&ctx, 2, lines);
+    undo_init(&ctx, 100, 1024 * 1024);
+
+    /* "cde" + newline + "fg" = 6 bytes; "hij" survives. */
+    ctx.view.sel_active = 1;
+    ctx.view.sel_start_y = 0; ctx.view.sel_start_x = 2;
+    ctx.view.sel_end_y = 1;   ctx.view.sel_end_x = 2;
+
+    int n = delete_selection(&ctx);
+    ASSERT_STR_EQ(ctx.model.row[0].chars, "abhij");
+    ASSERT_EQ(n, 6);
+
+    undo_free(&ctx);
+    editor_ctx_free(&ctx);
+}
+
+/* Row separators used to be appended without a capacity check, so a
+ * selection over more than 1024 empty rows overflowed the buffer. */
+TEST(get_selection_text_many_empty_rows) {
+    enum { N = 2000 };
+    const char *lines[N];
+    for (int i = 0; i < N; i++) lines[i] = "";
+    editor_ctx_t ctx;
+    init_multiline_ctx(&ctx, N, lines);
+
+    ctx.view.sel_active = 1;
+    ctx.view.sel_start_y = 0;     ctx.view.sel_start_x = 0;
+    ctx.view.sel_end_y = N - 1;   ctx.view.sel_end_x = 0;
+
+    char *text = get_selection_text(&ctx);
+    ASSERT_NOT_NULL(text);
+    ASSERT_EQ((int)strlen(text), N - 1);
+    free(text);
+    editor_ctx_free(&ctx);
+}
+
 BEGIN_TEST_SUITE("Selection and Clipboard")
     /* is_selected() - single line */
     RUN_TEST(selection_single_line_in_range);
@@ -562,4 +679,9 @@ BEGIN_TEST_SUITE("Selection and Clipboard")
     RUN_TEST(selection_empty_buffer);
     RUN_TEST(selection_single_character);
     RUN_TEST(selection_zero_width);
+    RUN_TEST(delete_selection_single_line_is_undoable);
+    RUN_TEST(delete_selection_multiline_is_undoable);
+    RUN_TEST(delete_selection_multiline_redo);
+    RUN_TEST(delete_selection_reports_exact_count);
+    RUN_TEST(get_selection_text_many_empty_rows);
 END_TEST_SUITE()

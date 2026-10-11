@@ -41,16 +41,16 @@ static int dynamic_command_count = 0;
  */
 static command_def_t builtin_commands[] = {
     /* File operations (file.c) */
-    {"w",      cmd_write,       "Write (save) file",              0, 1},
-    {"write",  cmd_write,       "Write (save) file",              0, 1},
-    {"e",      cmd_edit,        "Edit file",                      1, 1},
-    {"edit",   cmd_edit,        "Edit file",                      1, 1},
+    {"w",      cmd_write,       "Write (save) file",              0, -1},
+    {"write",  cmd_write,       "Write (save) file",              0, -1},
+    {"e",      cmd_edit,        "Edit file",                      1, -1},
+    {"edit",   cmd_edit,        "Edit file",                      1, -1},
 
     /* Basic commands (basic.c) */
     {"q",      cmd_quit,        "Quit editor",                    0, 0},
     {"quit",   cmd_quit,        "Quit editor",                    0, 0},
-    {"wq",     cmd_write_quit,  "Write and quit",                 0, 1},
-    {"x",      cmd_write_quit,  "Write and quit (if modified)",   0, 1},
+    {"wq",     cmd_write_quit,  "Write and quit",                 0, -1},
+    {"x",      cmd_write_quit,  "Write and quit (if modified)",   0, -1},
     {"q!",     cmd_force_quit,  "Quit without saving",            0, 0},
     {"quit!",  cmd_force_quit,  "Quit without saving",            0, 0},
     {"help",   cmd_help,        "Show help",                      0, 1},
@@ -63,7 +63,7 @@ static command_def_t builtin_commands[] = {
     /* Audio/MIDI (link.c, csd.c, export.c) */
     {"link",   cmd_link,        "Toggle Ableton Link sync",       0, 1},
     {"csd",    cmd_csd,         "Toggle Csound synthesis",        0, 1},
-    {"export", cmd_export,      "Export to MIDI file",            1, 1},
+    {"export", cmd_export,      "Export to MIDI file",            1, -1},
 
     /* Playback */
     {"play",   cmd_play,        "Play entire buffer",             0, 0},
@@ -117,7 +117,10 @@ void command_mode_exit(editor_ctx_t *ctx) {
     ctx->view.cmd_length = 0;
     ctx->view.cmd_cursor_pos = 0;
     memset(ctx->view.cmd_buffer, 0, sizeof(ctx->view.cmd_buffer));
-    editor_set_status_msg(ctx, "");
+    /* Note: the status message is deliberately left alone. It usually holds
+     * the result the command just produced ("3L written", "Unknown command:
+     * ..."); clearing it here wiped every command's feedback. Callers that
+     * abandon the command line clear it themselves. */
 }
 
 /* ======================== Command History ======================== */
@@ -188,6 +191,20 @@ command_def_t* command_find(const char *name) {
 /* ======================== Command Parsing ======================== */
 
 /* Parse command line into command name and arguments */
+/* Count whitespace-separated arguments in an argument string. */
+static int count_args(const char *args) {
+    if (!args) return 0;
+    int n = 0;
+    const char *p = args;
+    while (*p) {
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (!*p) break;
+        n++;
+        while (*p && !isspace((unsigned char)*p)) p++;
+    }
+    return n;
+}
+
 static int parse_command(const char *cmdline, char **cmd_name, char **args) {
     /* Skip leading ':' and whitespace */
     while (*cmdline && (*cmdline == ':' || isspace(*cmdline))) {
@@ -253,8 +270,9 @@ int command_execute(editor_ctx_t *ctx, const char *cmdline) {
         return 0;
     }
 
-    /* Add to history */
-    command_history_add(cmdline + 1);  /* Skip ':' prefix */
+    /* Add to history, skipping a leading ':' if present. command_execute is
+     * also called with bare command strings, where the ':' is absent. */
+    command_history_add(cmdline[0] == ':' ? cmdline + 1 : cmdline);
 
     /* Special case: numeric command like :123 -> go to line 123 */
     if (is_all_digits(cmd_name)) {
@@ -288,10 +306,18 @@ int command_execute(editor_ctx_t *ctx, const char *cmdline) {
         return 0;
     }
 
-    /* Validate argument count (simplified: just check if args exist) */
-    int has_args = (args && args[0]) ? 1 : 0;
-    if (has_args < cmd->min_args) {
-        editor_set_status_msg(ctx, ":%s requires arguments", cmd_name);
+    /* Validate argument count. */
+    int arg_count = count_args(args);
+    if (arg_count < cmd->min_args) {
+        editor_set_status_msg(ctx, ":%s requires %d argument%s", cmd_name,
+                              cmd->min_args, cmd->min_args == 1 ? "" : "s");
+        free(cmd_name);
+        free(args);
+        return 0;
+    }
+    if (cmd->max_args >= 0 && arg_count > cmd->max_args) {
+        editor_set_status_msg(ctx, ":%s takes at most %d argument%s", cmd_name,
+                              cmd->max_args, cmd->max_args == 1 ? "" : "s");
         free(cmd_name);
         free(args);
         return 0;
@@ -326,6 +352,8 @@ void command_mode_handle_key(editor_ctx_t *ctx, int fd, int key) {
 
     switch (key) {
         case ESC:
+            /* Abandoned command line: drop the ':' prompt too. */
+            editor_set_status_msg(ctx, "");
             command_mode_exit(ctx);
             break;
 
@@ -351,6 +379,7 @@ void command_mode_handle_key(editor_ctx_t *ctx, int fd, int key) {
                 editor_set_status_msg(ctx, "%s", ctx->view.cmd_buffer);
             } else {
                 /* Backspace on empty command exits command mode */
+                editor_set_status_msg(ctx, "");
                 command_mode_exit(ctx);
             }
             break;

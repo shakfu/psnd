@@ -1,4 +1,4 @@
-/* terminal_posix.c - POSIX terminal implementation
+/* POSIX terminal implementation
  *
  * Platform-specific terminal operations for POSIX systems (macOS, Linux).
  * Uses termios for raw mode, ioctl for window size, and VT100
@@ -10,6 +10,7 @@
 #include "terminal.h"
 #include <termios.h>
 #include <unistd.h>
+#include <poll.h>
 #include <sys/ioctl.h>
 #include <signal.h>
 #include <errno.h>
@@ -98,7 +99,7 @@ int terminal_host_enable_raw_mode(TerminalHost *host) {
     /* Enter alternate screen buffer (saves current screen, gives clean slate)
      * Only if stdout is a terminal (not a pipe or file) */
     if (isatty(STDOUT_FILENO)) {
-        (void)write(STDOUT_FILENO, "\x1b[?1049h", 8);
+        write_ignore_result(STDOUT_FILENO, "\x1b[?1049h", 8);
     }
 
     return 0;
@@ -110,7 +111,7 @@ void terminal_host_disable_raw_mode(TerminalHost *host) {
     /* Exit alternate screen buffer (restores original terminal content)
      * Only if stdout is a terminal (not a pipe or file) */
     if (isatty(STDOUT_FILENO)) {
-        (void)write(STDOUT_FILENO, "\x1b[?1049l", 8);
+        write_ignore_result(STDOUT_FILENO, "\x1b[?1049l", 8);
     }
 
     tcsetattr(host->fd, TCSAFLUSH, &host->orig_termios);
@@ -127,35 +128,54 @@ void terminal_host_clear_resize(TerminalHost *host) {
 
 /* ======================= Input Reading ==================================== */
 
+/* Read one byte of an escape sequence. Returns 1 on success, 0 on timeout
+ * (VTIME expiry, i.e. the sequence ended), -1 on error. Retries on EINTR so
+ * a signal mid-sequence does not leave seq[] uninitialized. */
+static int read_seq_byte(int fd, char *out) {
+    for (;;) {
+        int n = read(fd, out, 1);
+        if (n >= 0) return n;
+        if (errno == EINTR) continue;
+        return -1;
+    }
+}
+
+/* After a 0-byte read: is the input gone (hangup, closed pipe) rather than
+ * idle? An idle raw-mode tty returns 0 on every VTIME timeout; a hung-up one
+ * returns 0 at once, forever, and reports POLLHUP. */
+static int input_closed(int fd) {
+    struct pollfd p = { .fd = fd, .events = POLLIN, .revents = 0 };
+    return poll(&p, 1, 0) > 0 && (p.revents & (POLLHUP | POLLERR | POLLNVAL));
+}
+
 /* Read a key from the terminal put in raw mode, trying to handle
- * escape sequences. */
+ * escape sequences. Returns -1 on a read error or closed input. */
 int terminal_read_key(int fd) {
     int nread;
     char c, seq[6];
-    int retries = 0;
-    /* Wait for input with timeout. If we get too many consecutive
-     * zero-byte reads, stdin may be closed. */
-    while ((nread = read(fd, &c, 1)) == 0) {
-        if (++retries > 1000) {
-            /* After ~100 seconds of no input, assume stdin is closed */
-            fprintf(stderr, "\nNo input received, exiting.\n");
-            exit(0);
+    /* Raw mode sets VMIN=0/VTIME=1, so read() returns 0 on every 100 ms
+     * timeout. That is the normal idle case on a healthy terminal, not a
+     * closed stdin -- just keep waiting. Retry on EINTR. */
+    while ((nread = read(fd, &c, 1)) != 1) {
+        if (nread == 0) {
+            if (input_closed(fd)) return -1;
+            continue;
         }
+        if (errno == EINTR || errno == EAGAIN) continue;
+        return -1;
     }
-    if (nread == -1) exit(1);
 
-    while(1) {
-        switch(c) {
+    switch(c) {
         case ESC:    /* escape sequence */
             /* If this is just an ESC, we'll timeout here. */
-            if (read(fd, seq, 1) == 0) return ESC;
-            if (read(fd, seq+1, 1) == 0) return ESC;
+            if (read_seq_byte(fd, seq) != 1) return ESC;
+            if (read_seq_byte(fd, seq+1) != 1) return ESC;
 
             /* ESC [ sequences. */
             if (seq[0] == '[') {
                 if (seq[1] >= '0' && seq[1] <= '9') {
                     /* Extended escape, read additional byte. */
-                    if (read(fd, seq+2, 1) == 0) return ESC;
+                    if (read_seq_byte(fd, seq+2) != 1) return ESC;
                     if (seq[2] == '~') {
                         switch(seq[1]) {
                         case '3': return DEL_KEY;
@@ -164,8 +184,8 @@ int terminal_read_key(int fd) {
                         }
                     } else if (seq[2] == ';') {
                         /* ESC[1;2X for Shift+Arrow */
-                        if (read(fd, seq+3, 1) == 0) return ESC;
-                        if (read(fd, seq+4, 1) == 0) return ESC;
+                        if (read_seq_byte(fd, seq+3) != 1) return ESC;
+                        if (read_seq_byte(fd, seq+4) != 1) return ESC;
                         if (seq[1] == '1' && seq[3] == '2') {
                             switch(seq[4]) {
                             case 'A': return SHIFT_ARROW_UP;
@@ -176,10 +196,10 @@ int terminal_read_key(int fd) {
                         }
                     } else if (seq[1] == '1' && seq[2] == '3') {
                         /* ESC[13;2u - Shift+Return (kitty keyboard protocol) */
-                        if (read(fd, seq+3, 1) == 0) return ESC;
+                        if (read_seq_byte(fd, seq+3) != 1) return ESC;
                         if (seq[3] == ';') {
-                            if (read(fd, seq+4, 1) == 0) return ESC;
-                            if (read(fd, seq+5, 1) == 0) return ESC;
+                            if (read_seq_byte(fd, seq+4) != 1) return ESC;
+                            if (read_seq_byte(fd, seq+5) != 1) return ESC;
                             if (seq[4] == '2' && seq[5] == 'u') {
                                 return SHIFT_RETURN;
                             }
@@ -204,10 +224,12 @@ int terminal_read_key(int fd) {
                 case 'F': return END_KEY;
                 }
             }
-            break;
+
+            /* Unrecognized sequence. Report a bare ESC rather than looping
+             * with c == ESC, which used to swallow the next two keystrokes. */
+            return ESC;
         default:
             return c;
-        }
     }
 }
 
@@ -243,7 +265,7 @@ int terminal_get_cursor_position(int ifd, int ofd, int *rows, int *cols) {
 int terminal_get_window_size(int ifd, int ofd, int *rows, int *cols) {
     struct winsize ws;
 
-    if (ioctl(1, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
+    if (ioctl(ofd, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
         /* ioctl() failed. Try to query the terminal itself. */
         int orig_row, orig_col, retval;
 
@@ -309,9 +331,18 @@ void terminal_handle_resize(editor_ctx_t *ctx) {
     if (terminal_host_resize_pending(g_terminal_host)) {
         terminal_host_clear_resize(g_terminal_host);
         terminal_update_window_size(ctx);
-        /* cy/cx are 0-indexed, so valid range is [0, screenrows-1] */
-        if (ctx->view.cy >= ctx->view.screenrows) ctx->view.cy = ctx->view.screenrows - 1;
-        if (ctx->view.cx >= ctx->view.screencols) ctx->view.cx = ctx->view.screencols - 1;
+        if (ctx->view.screenrows > 0 && ctx->view.cy >= ctx->view.screenrows)
+            ctx->view.cy = ctx->view.screenrows - 1;
+        if (ctx->view.screencols > 0 && ctx->view.cx >= ctx->view.screencols)
+            ctx->view.cx = ctx->view.screencols - 1;
+        if (ctx->view.cy < 0) ctx->view.cy = 0;
+        if (ctx->view.cx < 0) ctx->view.cx = 0;
+        /* Re-clamp the scroll offsets: shrinking the window could otherwise
+         * leave the view scrolled past the end of the buffer. */
+        if (ctx->view.rowoff > ctx->model.numrows - 1)
+            ctx->view.rowoff = ctx->model.numrows - 1;
+        if (ctx->view.rowoff < 0) ctx->view.rowoff = 0;
+        if (ctx->view.coloff < 0) ctx->view.coloff = 0;
     }
 }
 
@@ -322,8 +353,8 @@ void terminal_buffer_append(struct abuf *ab, const char *s, int len) {
 
     if (new == NULL) {
         /* Out of memory - attempt to restore terminal and exit cleanly */
-        write(STDOUT_FILENO, "\x1b[2J", 4);  /* Clear screen */
-        write(STDOUT_FILENO, "\x1b[H", 3);   /* Go home */
+        write_ignore_result(STDOUT_FILENO, "\x1b[2J", 4);  /* Clear screen */
+        write_ignore_result(STDOUT_FILENO, "\x1b[H", 3);   /* Go home */
         perror("Out of memory during screen refresh");
         exit(1);
     }

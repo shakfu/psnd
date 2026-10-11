@@ -17,6 +17,7 @@
 
 #include "selection.h"
 #include "internal.h"
+#include "undo.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -154,46 +155,9 @@ void copy_selection_to_clipboard(editor_ctx_t *ctx) {
         return;
     }
 
-    /* Ensure start comes before end */
-    int start_y = ctx->view.sel_start_y;
-    int start_x = ctx->view.sel_start_x;
-    int end_y = ctx->view.sel_end_y;
-    int end_x = ctx->view.sel_end_x;
-
-    if (start_y > end_y || (start_y == end_y && start_x > end_x)) {
-        int tmp;
-        tmp = start_y; start_y = end_y; end_y = tmp;
-        tmp = start_x; start_x = end_x; end_x = tmp;
-    }
-
-    /* Build selected text */
-    char *text = NULL;
-    size_t text_len = 0;
-    size_t text_capacity = 1024;
-    text = malloc(text_capacity);
+    char *text = get_selection_text(ctx);
     if (!text) return;
-
-    for (int y = start_y; y <= end_y && y < ctx->model.numrows; y++) {
-        int x_start = (y == start_y) ? start_x : 0;
-        int x_end = (y == end_y) ? end_x : ctx->model.row[y].size;
-        if (x_end > ctx->model.row[y].size) x_end = ctx->model.row[y].size;
-
-        int len = x_end - x_start;
-        if (len > 0) {
-            while (text_len + len + 2 > text_capacity) {
-                text_capacity *= 2;
-                char *new_text = realloc(text, text_capacity);
-                if (!new_text) { free(text); return; }
-                text = new_text;
-            }
-            memcpy(text + text_len, ctx->model.row[y].chars + x_start, len);
-            text_len += len;
-        }
-        if (y < end_y) {
-            text[text_len++] = '\n';
-        }
-    }
-    text[text_len] = '\0';
+    size_t text_len = strlen(text);
 
     /* Copy to clipboard using abstraction */
     int result = clipboard_copy_text(ctx, text, text_len);
@@ -207,11 +171,6 @@ void copy_selection_to_clipboard(editor_ctx_t *ctx) {
     }
 }
 
-/* Forward declarations for row operations */
-void editor_row_del_char(editor_ctx_t *ctx, t_erow *row, int at);
-void editor_row_append_string(editor_ctx_t *ctx, t_erow *row, char *s, size_t len);
-void editor_del_row(editor_ctx_t *ctx, int at);
-void editor_update_row(editor_ctx_t *ctx, t_erow *row);
 
 /* Get selected text as a newly allocated string.
  * Caller must free the returned string.
@@ -246,13 +205,14 @@ char *get_selection_text(editor_ctx_t *ctx) {
         if (x_end > ctx->model.row[y].size) x_end = ctx->model.row[y].size;
 
         int len = x_end - x_start;
+        int need = len + (y < end_y ? 1 : 0) + 1;  /* + separator + NUL */
+        while (text_len + need > text_capacity) {
+            text_capacity *= 2;
+            char *new_text = realloc(text, text_capacity);
+            if (!new_text) { free(text); return NULL; }
+            text = new_text;
+        }
         if (len > 0) {
-            while (text_len + len + 2 > text_capacity) {
-                text_capacity *= 2;
-                char *new_text = realloc(text, text_capacity);
-                if (!new_text) { free(text); return NULL; }
-                text = new_text;
-            }
             memcpy(text + text_len, ctx->model.row[y].chars + x_start, len);
             text_len += len;
         }
@@ -266,7 +226,7 @@ char *get_selection_text(editor_ctx_t *ctx) {
 }
 
 /* Delete selected text from the buffer.
- * Records undo operations for each deletion.
+ * Records the deleted range as a single undo entry.
  * Clears selection and positions cursor at selection start.
  * Returns number of characters deleted, or 0 if no selection. */
 int delete_selection(editor_ctx_t *ctx) {
@@ -300,7 +260,20 @@ int delete_selection(editor_ctx_t *ctx) {
     if (start_x < 0) start_x = 0;
     if (end_x < 0) end_x = 0;
 
+    /* Snapshot the region before touching the buffer so the delete can be
+     * undone. get_selection_text() reads the selection fields, which are
+     * still intact at this point. */
+    ctx->view.sel_start_y = start_y;
+    ctx->view.sel_start_x = start_x;
+    ctx->view.sel_end_y = end_y;
+    ctx->view.sel_end_x = end_x;
+    char *deleted_text = get_selection_text(ctx);
     int deleted_chars = 0;
+    if (deleted_text) {
+        deleted_chars = (int)strlen(deleted_text);
+        undo_record_delete_block(ctx, start_y, start_x,
+                                 deleted_text, deleted_chars);
+    }
 
     /* Clear selection before modifying buffer */
     ctx->view.sel_active = 0;
@@ -313,7 +286,6 @@ int delete_selection(editor_ctx_t *ctx) {
         for (int i = end_x - 1; i >= start_x; i--) {
             if (i < row->size) {
                 editor_row_del_char(ctx, row, i);
-                deleted_chars++;
             }
         }
     } else {
@@ -331,15 +303,12 @@ int delete_selection(editor_ctx_t *ctx) {
         }
 
         /* 2. Truncate start row to start_x */
-        int chars_removed_start = start_row->size - start_x;
         start_row->chars[start_x] = '\0';
         start_row->size = start_x;
         editor_update_row(ctx, start_row);
-        deleted_chars += chars_removed_start;
 
         /* 3. Delete middle rows and end row (from end to start to avoid index shifting) */
         for (int y = end_y; y > start_y; y--) {
-            deleted_chars += ctx->model.row[y].size + 1; /* +1 for newline */
             editor_del_row(ctx, y);
         }
 
@@ -370,5 +339,6 @@ int delete_selection(editor_ctx_t *ctx) {
 
     ctx->model.dirty++;
 
+    free(deleted_text);
     return deleted_chars;
 }

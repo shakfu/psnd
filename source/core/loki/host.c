@@ -11,7 +11,6 @@
 #include "event.h"
 #include "buffers.h"
 #include "lang_bridge.h"
-#include "loki/link.h"
 #include "live_loop.h"
 #include "async_queue.h"
 #include <stdlib.h>
@@ -69,6 +68,9 @@ int editor_host_loop(EditorHost *host, EditorSession *session) {
 
         /* Read next event */
         int read_result = host->read_event(host, &event, 100); /* 100ms timeout */
+        if (read_result < 0) {
+            return -1;  /* Input is gone; looping would spin */
+        }
 
         if (read_result == 0) {
             /* Process event */
@@ -84,7 +86,7 @@ int editor_host_loop(EditorHost *host, EditorSession *session) {
                 host->callbacks.on_tick(host, session);
             }
         }
-        /* Timeout or error - continue loop for render/resize handling */
+        /* Timeout - continue loop for render/resize handling */
     }
 
     return 0;
@@ -109,6 +111,10 @@ static int terminal_host_read_event(EditorHost *host, EditorEvent *event, int ti
         /* Actual dimensions will be fetched by session */
         int rows, cols;
         terminal_get_window_size(data->input_fd, STDOUT_FILENO, &rows, &cols);
+        /* EVENT_RESIZE carries text rows, as the web hosts send them; the
+         * terminal draws the status and message lines itself. */
+        rows -= STATUS_ROWS;
+        if (rows < 1) rows = 1;
         event->data.resize.rows = rows;
         event->data.resize.cols = cols;
         return 0;
@@ -117,7 +123,7 @@ static int terminal_host_read_event(EditorHost *host, EditorEvent *event, int ti
     /* Read key */
     int key = terminal_read_key(data->input_fd);
     if (key == -1) {
-        return 1; /* Timeout */
+        return -1; /* Input closed or failed */
     }
 
     *event = event_from_keycode(key);

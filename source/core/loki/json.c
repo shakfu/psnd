@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <limits.h>
 
 /* ======================= JSON Builder ====================================== */
 
@@ -302,11 +303,22 @@ static JsonValue parse_number(JsonParser *p) {
         p->pos++;
     }
 
+    /* Accumulate with saturation: signed overflow would be undefined. */
     int val = 0;
+    int overflow = 0;
+    int digits = 0;
     while (p->pos < p->len && isdigit((unsigned char)p->json[p->pos])) {
-        val = val * 10 + (p->json[p->pos] - '0');
+        int d = p->json[p->pos] - '0';
+        if (val > (INT_MAX - d) / 10) {
+            overflow = 1;
+        } else {
+            val = val * 10 + d;
+        }
+        digits++;
         p->pos++;
     }
+    if (digits == 0) return result;   /* "-" with no digits is not a number */
+    if (overflow) val = INT_MAX;
 
     /* Skip fractional/exponent parts - we only need integers */
     if (p->pos < p->len && p->json[p->pos] == '.') {
@@ -409,17 +421,8 @@ static JsonValue parse_object(JsonParser *p) {
         while (1) {
             if (count >= cap) {
                 cap *= 2;
-                /* Adopt each successful realloc immediately. Testing both
-                 * before reassigning would leave `keys` dangling when the first
-                 * call succeeded and the second failed, and the cleanup below
-                 * would then read through it and free it twice. */
                 char **new_keys = realloc(keys, cap * sizeof(char *));
-                if (new_keys) keys = new_keys;
-
-                JsonValue *new_values = realloc(values, cap * sizeof(JsonValue));
-                if (new_values) values = new_values;
-
-                if (!new_keys || !new_values) {
+                if (!new_keys) {
                     for (size_t i = 0; i < count; i++) {
                         free(keys[i]);
                         json_value_free(&values[i]);
@@ -428,6 +431,18 @@ static JsonValue parse_object(JsonParser *p) {
                     free(values);
                     return result;
                 }
+                keys = new_keys;
+                JsonValue *new_values = realloc(values, cap * sizeof(JsonValue));
+                if (!new_values) {
+                    for (size_t i = 0; i < count; i++) {
+                        free(keys[i]);
+                        json_value_free(&values[i]);
+                    }
+                    free(keys);
+                    free(values);
+                    return result;
+                }
+                values = new_values;
             }
 
             JsonValue key_val = parse_string(p);
@@ -493,6 +508,14 @@ static JsonValue parse_object(JsonParser *p) {
     return result;
 }
 
+/* Is the byte at 'at' one that could continue a bare literal? Used so that
+ * "trueX" is rejected rather than parsed as true followed by garbage. */
+static int is_literal_char(JsonParser *p, size_t at) {
+    if (at >= p->len) return 0;
+    unsigned char c = (unsigned char)p->json[at];
+    return isalnum(c) || c == '_';
+}
+
 static JsonValue parse_value(JsonParser *p) {
     JsonValue result = { .type = JSON_ERROR };
 
@@ -504,27 +527,27 @@ static JsonValue parse_value(JsonParser *p) {
     if (c == '"') {
         return parse_string(p);
     } else if (c == '{' || c == '[') {
-        /* Containers are the only recursive case. Track depth here rather than
-         * inside parse_object/parse_array so the accounting stays symmetric
-         * across their many error-return paths. */
-        if (p->depth >= JSON_MAX_DEPTH) return result;
+        if (p->depth >= JSON_MAX_DEPTH) return result;  /* too deeply nested */
         p->depth++;
         result = (c == '{') ? parse_object(p) : parse_array(p);
         p->depth--;
         return result;
     } else if (c == '-' || isdigit(c)) {
         return parse_number(p);
-    } else if (strncmp(p->json + p->pos, "true", 4) == 0) {
+    } else if (strncmp(p->json + p->pos, "true", 4) == 0 &&
+               !is_literal_char(p, p->pos + 4)) {
         p->pos += 4;
         result.type = JSON_BOOL;
         result.data.bool_val = 1;
         return result;
-    } else if (strncmp(p->json + p->pos, "false", 5) == 0) {
+    } else if (strncmp(p->json + p->pos, "false", 5) == 0 &&
+               !is_literal_char(p, p->pos + 5)) {
         p->pos += 5;
         result.type = JSON_BOOL;
         result.data.bool_val = 0;
         return result;
-    } else if (strncmp(p->json + p->pos, "null", 4) == 0) {
+    } else if (strncmp(p->json + p->pos, "null", 4) == 0 &&
+               !is_literal_char(p, p->pos + 4)) {
         p->pos += 4;
         result.type = JSON_NULL;
         return result;
@@ -545,7 +568,18 @@ JsonValue json_parse(const char *json) {
         .len = strlen(json),
         .depth = 0
     };
-    return parse_value(&p);
+    JsonValue v = parse_value(&p);
+    if (v.type == JSON_ERROR) return v;
+
+    /* Reject trailing content: '{"cmd":"load"}xyz' used to parse as a valid
+     * object with the garbage silently ignored. */
+    skip_whitespace(&p);
+    if (p.pos != p.len) {
+        json_value_free(&v);
+        JsonValue err = { .type = JSON_ERROR };
+        return err;
+    }
+    return v;
 }
 
 void json_value_free(JsonValue *val) {

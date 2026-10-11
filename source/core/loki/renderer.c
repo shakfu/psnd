@@ -26,6 +26,7 @@ HighlightType hl_const_to_type(int hl_const) {
     switch (hl_const) {
         case HL_NORMAL:   return HL_TYPE_NORMAL;
         case HL_COMMENT:  return HL_TYPE_COMMENT;
+        case HL_MLCOMMENT: return HL_TYPE_COMMENT;
         case HL_KEYWORD1: return HL_TYPE_KEYWORD1;
         case HL_KEYWORD2: return HL_TYPE_KEYWORD2;
         case HL_STRING:   return HL_TYPE_STRING;
@@ -64,7 +65,7 @@ static void terminal_end_frame(Renderer *r) {
     terminal_buffer_append(&data->ab, "\x1b[?25h", 6);
 
     /* Flush buffer to terminal */
-    write(STDOUT_FILENO, data->ab.b, data->ab.len);
+    write_ignore_result(STDOUT_FILENO, data->ab.b, data->ab.len);
 }
 
 static void terminal_render_tabs(Renderer *r, const char **tabs, int tab_count,

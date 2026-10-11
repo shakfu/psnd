@@ -661,6 +661,40 @@ TEST(cmd_unregister_all_clears_dynamic) {
     command_unregister_all_dynamic();
 }
 
+TEST(cmd_execute_rejects_too_many_args) {
+    editor_ctx_t ctx;
+    init_cmd_ctx(&ctx);
+
+    /* :goto takes exactly one argument; max_args used to be ignored. */
+    int result = command_execute(&ctx, ":goto 1 2");
+    ASSERT_EQ(result, 0);
+    ASSERT_TRUE(strstr(ctx.view.statusmsg, "at most") != NULL);
+
+    free_cmd_ctx(&ctx);
+}
+
+TEST(cmd_execute_set_with_value_reports_failure) {
+    editor_ctx_t ctx;
+    init_cmd_ctx(&ctx);
+
+    /* No option takes a value; this used to claim success. */
+    ASSERT_EQ(command_execute(&ctx, ":set foo=bar"), 0);
+
+    free_cmd_ctx(&ctx);
+}
+
+TEST(command_mode_exit_keeps_status_message) {
+    editor_ctx_t ctx;
+    init_cmd_ctx(&ctx);
+
+    /* command_mode_exit() used to erase the command's own feedback. */
+    editor_set_status_msg(&ctx, "3L written");
+    command_mode_exit(&ctx);
+    ASSERT_STR_EQ(ctx.view.statusmsg, "3L written");
+
+    free_cmd_ctx(&ctx);
+}
+
 BEGIN_TEST_SUITE("Command Mode")
     /* Enter/Exit */
     RUN_TEST(cmd_mode_enter_sets_mode);
@@ -702,6 +736,9 @@ BEGIN_TEST_SUITE("Command Mode")
     RUN_TEST(cmd_execute_alias_quit);
     RUN_TEST(cmd_execute_alias_write);
     RUN_TEST(cmd_execute_alias_h_for_help);
+    RUN_TEST(cmd_execute_rejects_too_many_args);
+    RUN_TEST(cmd_execute_set_with_value_reports_failure);
+    RUN_TEST(command_mode_exit_keeps_status_message);
 
     /* Dynamic registration */
     RUN_TEST(cmd_register_custom_command);

@@ -74,9 +74,10 @@ int cmd_set(editor_ctx_t *ctx, const char *args) {
 
     if (sscanf(args, "%63s = %63s", option, value) == 2 ||
         sscanf(args, "%63s=%63s", option, value) == 2) {
-        /* Set option to value */
-        editor_set_status_msg(ctx, "Set %s=%s (not implemented yet)", option, value);
-        return 1;
+        /* No option currently takes a value; report failure rather than
+         * claiming success for a setting that was never applied. */
+        editor_set_status_msg(ctx, "Unknown option: %s", option);
+        return 0;
     } else if (sscanf(args, "%63s", option) == 1) {
         /* Toggle boolean option or show value */
         if (strcmp(option, "wrap") == 0) {

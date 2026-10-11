@@ -466,6 +466,60 @@ TEST(modal_normal_visual_normal_cycle) {
     editor_ctx_free(&ctx);
 }
 
+/* 'a' at end of line must stay on the line; ARROW_RIGHT used to wrap to
+ * the next row. */
+TEST(modal_normal_a_at_end_of_line_stays_on_line) {
+    editor_ctx_t ctx;
+    const char *lines[] = {"abc", "next"};
+    init_multiline_ctx(&ctx, 2, lines);
+
+    ctx.view.cy = 0;
+    ctx.view.cx = 3;
+    ctx.view.mode = MODE_NORMAL;
+
+    modal_process_normal_mode_key(&ctx, 0, 'a');
+
+    ASSERT_EQ(ctx.view.mode, MODE_INSERT);
+    ASSERT_EQ(ctx.view.cy, 0);
+    ASSERT_EQ(ctx.view.cx, 3);
+
+    editor_ctx_free(&ctx);
+}
+
+/* '}' on an empty buffer used to set rowoff to -1. */
+TEST(modal_normal_paragraph_motion_on_empty_buffer) {
+    editor_ctx_t ctx;
+    editor_ctx_init(&ctx);
+    ctx.view.screenrows = 24;
+    ctx.view.screencols = 80;
+    ctx.view.mode = MODE_NORMAL;
+
+    modal_process_normal_mode_key(&ctx, 0, '}');
+
+    ASSERT_TRUE(ctx.view.rowoff >= 0);
+    ASSERT_TRUE(ctx.view.cy >= 0);
+
+    editor_ctx_free(&ctx);
+}
+
+/* The Ctrl-Q counter is per context; it used to be a function static
+ * shared by every editor. */
+TEST(modal_quit_counter_is_per_context) {
+    editor_ctx_t a, b;
+    init_simple_ctx(&a, "x");
+    init_simple_ctx(&b, "y");
+    a.model.dirty = 1;
+    b.model.dirty = 1;
+
+    EditorEvent ev = event_from_keycode(CTRL_Q);
+    modal_process_event(&a, &ev);
+    ASSERT_EQ(a.view.quit_times, KILO_QUIT_TIMES - 1);
+    ASSERT_EQ(b.view.quit_times, KILO_QUIT_TIMES);
+
+    editor_ctx_free(&a);
+    editor_ctx_free(&b);
+}
+
 BEGIN_TEST_SUITE("Modal Editing")
     /* NORMAL mode navigation */
     RUN_TEST(modal_normal_h_moves_left);
@@ -499,4 +553,7 @@ BEGIN_TEST_SUITE("Modal Editing")
     RUN_TEST(modal_default_is_normal);
     RUN_TEST(modal_normal_insert_normal_cycle);
     RUN_TEST(modal_normal_visual_normal_cycle);
+    RUN_TEST(modal_normal_a_at_end_of_line_stays_on_line);
+    RUN_TEST(modal_normal_paragraph_motion_on_empty_buffer);
+    RUN_TEST(modal_quit_counter_is_per_context);
 END_TEST_SUITE()

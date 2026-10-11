@@ -107,6 +107,14 @@ void async_queue_cleanup(void) {
         return;
     }
 
+    /* Stop accepting new events before tearing anything down. Taking the
+     * lock here means any push already in flight has finished; pushes that
+     * arrive afterwards fail in resolve_queue() instead of using a
+     * destroyed mutex. */
+    uv_mutex_lock(&g_queue.mutex);
+    g_queue.initialized = 0;
+    uv_mutex_unlock(&g_queue.mutex);
+
     /* Drain queue and free any heap data */
     AsyncEvent event;
     while (async_queue_poll(&g_queue, &event) == 0) {
@@ -120,8 +128,6 @@ void async_queue_cleanup(void) {
     uv_run(g_queue.loop, UV_RUN_NOWAIT);
 
     uv_mutex_destroy(&g_queue.mutex);
-
-    g_queue.initialized = 0;
 }
 
 AsyncEventQueue *async_queue_global(void) {
@@ -330,6 +336,10 @@ int async_queue_peek(AsyncEventQueue *queue, AsyncEvent *event) {
     }
 
     *event = queue->events[head];
+    /* Peek does not transfer ownership: the queue still owns any heap data,
+     * and the next pop will free it. Do not hand out a pointer that is about
+     * to dangle. */
+    event->heap_data = NULL;
     return 0;
 }
 
