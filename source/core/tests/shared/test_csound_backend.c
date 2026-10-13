@@ -429,7 +429,7 @@ static char *build_big_orc(int generation, size_t *out_len) {
     if (!orc) return NULL;
 
     size_t off = 0;
-    for (int i = 0; i < 600; i++) {
+    for (int i = 0; i < 1200; i++) {
         off += (size_t)snprintf(orc + off, cap - off,
             "instr %d\n"
             "k1 line 1, p3, 0\n"
@@ -437,7 +437,7 @@ static char *build_big_orc(int generation, size_t *out_len) {
             "a2 oscil 0.05*k1, %d\n"
             "out (a1+a2)*0.5\n"
             "endin\n",
-            1000 + generation * 1000 + i, 100 + i, 300 + i);
+            1000 + generation * 10000 + i, 100 + i, 300 + i);
     }
     if (out_len) *out_len = off;
     return orc;
@@ -495,14 +495,20 @@ TEST(csound_render_skips_rather_than_blocking_on_compile) {
 
 /* Background compiler: holds the engine mutex in long bursts. */
 static volatile int g_compiler_done = 0;
+static double g_min_hold_ms = 0.0;
 
 static void compile_thread_fn(void *arg) {
     (void)arg;
+    g_min_hold_ms = 1e9;
     for (int gen = 0; gen < 3; gen++) {
         size_t len = 0;
         char *orc = build_big_orc(100 + gen, &len);
         if (orc) {
+            /* compile_orc holds the mutex for its whole duration. */
+            uint64_t t0 = uv_hrtime();
             shared_csound_compile_orc(orc);
+            double ms = (double)(uv_hrtime() - t0) / 1e6;
+            if (ms < g_min_hold_ms) g_min_hold_ms = ms;
             free(orc);
         }
     }
@@ -541,12 +547,13 @@ TEST(csound_render_returns_promptly_while_compiling) {
 
     uv_thread_join(&compiler);
 
-    /* Each compile holds the mutex for ~30ms. A blocking lock would show up here
-     * as a render call of that order; the try-lock returns in microseconds. The
-     * bound is loose so this measures blocking, not machine speed. */
-    printf("    (%ld render calls, worst %.2f ms)\n", samples, worst_ms);
+    /* A blocking lock stalls one render for nearly a full compile, so bound
+     * against the measured hold, not a fixed time. A fixed 15ms bound failed on
+     * Windows CI: one preemption costs a 15.6ms scheduler quantum. */
+    printf("    (%ld render calls, worst %.2f ms, shortest hold %.2f ms)\n",
+           samples, worst_ms, g_min_hold_ms);
     ASSERT_TRUE(samples > 0);
-    ASSERT_TRUE(worst_ms < 15.0);
+    ASSERT_TRUE(worst_ms < 0.75 * g_min_hold_ms);
 
     shared_csound_cleanup();
 }
