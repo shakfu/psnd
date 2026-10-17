@@ -4,6 +4,18 @@
 
 ## High
 
+- [ ] Bog in the editor ticks only on editor-loop iterations #known-bugs
+
+  - `bog_lang_check_callbacks` runs once per editor loop. When idle, the loop wakes on the 100 ms raw-mode read timeout (`terminal_posix.c:90`), so on-time dispatch can be up to 100 ms late.
+
+  - Fix: tick Bog from a dedicated thread or libuv timer (as `bog_async.c` does for the REPL). `bog_lang_eval` and the other scheduler calls in `register.c` must then hold the tick lock, as `repl.c` does with `bog_async_lock()`.
+
+- [ ] Bog never sends note-off #known-bugs
+
+  - `bog_audio_note` (`register.c:91`) and `repl_audio_note` (`repl.c:312`) send only `shared_send_note_on`. Melodic voices keep sounding on backends that sustain notes.
+
+  - Fix: give each event a duration (drum and synth defaults, as `bog_midi` uses) and queue a note-off.
+
 - [ ] Phrase arrays leaked on tracker engine teardown #known-bugs
 
   **Status:** Open
@@ -187,6 +199,18 @@
   - The real third copy is `lua.c:3111-3160`, which carries its own `history[]`, `history_index`, and key loop for the in-editor REPL. That one can diverge.
 
 ## Medium
+
+- [ ] Bog unification has no occurs check #known-bugs
+
+  - `X = f(X)` creates a cyclic binding. `bog_subst_term` (`bog.c:921`) then recurses without bound and can overflow the stack. The resolver limits do not cover recursion inside substitution.
+
+  - Fix: occurs check in `bog_unify` when binding a variable, or a depth bound in `bog_subst_term`.
+
+- [ ] Bog query truncation is silent #known-bugs
+
+  - The scheduler (`scheduler.c:615`) ignores `BogSolutions.truncated`. A runaway program goes silent with no message.
+
+  - Fix: record truncation in the scheduler and expose it through `bog_lang_get_error` and the REPL.
 
 - [ ] Fix remaining stale path references in docs #documentation
 

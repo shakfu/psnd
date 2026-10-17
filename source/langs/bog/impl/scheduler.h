@@ -1,6 +1,8 @@
 #ifndef CPROLOG_SCHEDULER_H
 #define CPROLOG_SCHEDULER_H
 
+#include <stdint.h>
+
 #include "bog.h"
 
 #ifdef __cplusplus
@@ -20,6 +22,10 @@ typedef struct {
     void (*triangle)(void* userdata, double time, double midi,
                      double velocity);
     void (*noise)(void* userdata, double time, double velocity);
+    /* Receives every event, any voice atom, when set; the named callbacks
+     * above are then unused */
+    void (*note)(void* userdata, const char* voice, double time,
+                 double midi, double velocity);
 } BogAudioCallbacks;
 
 typedef void (*BogBeatCallback)(int beat, void* userdata);
@@ -45,6 +51,9 @@ void bog_state_manager_set_last_trigger(BogStateManager* manager,
 bool bog_state_manager_can_trigger(const BogStateManager* manager,
                                        const char* key, double now,
                                        double gap);
+/* Random stream for prob/pick/rand/randint. Seeded from the clock at create. */
+void bog_state_manager_seed(BogStateManager* manager, uint64_t seed);
+double bog_state_manager_random(BogStateManager* manager); /* [0, 1) */
 
 /* Scheduler API */
 BogScheduler* bog_scheduler_create(const BogAudioCallbacks* audio,
@@ -53,6 +62,11 @@ BogScheduler* bog_scheduler_create(const BogAudioCallbacks* audio,
 void bog_scheduler_destroy(BogScheduler* scheduler);
 void bog_scheduler_set_program(BogScheduler* scheduler,
                                    const BogProgram* program);
+const BogProgram* bog_scheduler_get_program(const BogScheduler* scheduler);
+/* Hold queried events and call back when now reaches their time, for hosts
+ * whose output cannot be timestamped. Off by default. */
+void bog_scheduler_set_dispatch_on_time(BogScheduler* scheduler,
+                                        bool enabled);
 void bog_scheduler_configure(BogScheduler* scheduler, double bpm,
                                  double swing, double lookahead_ms,
                                  double grid_beats);

@@ -18,8 +18,11 @@ struct BogLiveEvaluator {
     BogScheduler* scheduler;
     double debounce_seconds;
     char* last_code;
-    BogArena* program_arena;
+    BogTransitionManager* transition;
+    BogArena* program_arena;     /* latest program; may be a pending swap */
     const BogProgram* program;
+    BogArena* playing_arena;     /* program still playing while latest is
+                                  * pending, else NULL */
     LiveCallbackEntry* callbacks;
     size_t callback_count;
     size_t callback_capacity;
@@ -198,6 +201,8 @@ void bog_live_evaluator_destroy(BogLiveEvaluator* evaluator)
     free(evaluator->last_code);
     if (evaluator->program_arena)
         bog_arena_destroy(evaluator->program_arena);
+    if (evaluator->playing_arena)
+        bog_arena_destroy(evaluator->playing_arena);
     free(evaluator->callbacks);
     free(evaluator);
 }
@@ -208,6 +213,37 @@ void bog_live_evaluator_set_scheduler(BogLiveEvaluator* evaluator,
     if (!evaluator)
         return;
     evaluator->scheduler = scheduler;
+}
+
+void bog_live_evaluator_set_transition(BogLiveEvaluator* evaluator,
+                                       BogTransitionManager* transition)
+{
+    if (!evaluator)
+        return;
+    evaluator->transition = transition;
+}
+
+/* Swap through the transition manager. The playing program's arena stays
+ * alive until the scheduler stops using it. */
+static void install_at_transition(BogLiveEvaluator* evaluator,
+                                  BogArena* arena, BogProgram* program)
+{
+    if (evaluator->playing_arena
+        && bog_scheduler_get_program(evaluator->scheduler)
+            == evaluator->program) {
+        bog_arena_destroy(evaluator->playing_arena);
+        evaluator->playing_arena = NULL;
+    }
+    BogArena* replaced = NULL;
+    if (evaluator->playing_arena)
+        replaced = evaluator->program_arena; /* pending, never played */
+    else
+        evaluator->playing_arena = evaluator->program_arena;
+    evaluator->program_arena = arena;
+    evaluator->program = program;
+    bog_transition_manager_schedule(evaluator->transition, program);
+    if (replaced)
+        bog_arena_destroy(replaced);
 }
 
 bool bog_live_evaluator_evaluate(BogLiveEvaluator* evaluator,
@@ -235,15 +271,18 @@ bool bog_live_evaluator_evaluate(BogLiveEvaluator* evaluator,
     free(evaluator->last_code);
     evaluator->last_code = text ? strdup(text) : NULL;
 
-    if (evaluator->program_arena) {
-        bog_arena_destroy(evaluator->program_arena);
-    }
-    evaluator->program_arena = arena;
-    evaluator->program = program;
-
-    if (evaluator->scheduler) {
-        bog_scheduler_set_program(evaluator->scheduler,
-                                      evaluator->program);
+    if (evaluator->transition && evaluator->scheduler) {
+        install_at_transition(evaluator, arena, program);
+    } else {
+        if (evaluator->scheduler)
+            bog_scheduler_set_program(evaluator->scheduler, program);
+        if (evaluator->program_arena)
+            bog_arena_destroy(evaluator->program_arena);
+        if (evaluator->playing_arena)
+            bog_arena_destroy(evaluator->playing_arena);
+        evaluator->playing_arena = NULL;
+        evaluator->program_arena = arena;
+        evaluator->program = program;
     }
 
     notify_callbacks(evaluator, true,

@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "builtins.h"
+#include "internal.h"
 
 typedef struct {
     char* key;
@@ -24,7 +25,17 @@ struct BogStateManager {
     TriggerEntry* triggers;
     size_t trigger_count;
     size_t trigger_capacity;
+    uint64_t rng_state;
 };
+
+/* An event held for on-time dispatch */
+typedef struct {
+    char* voice;
+    double time;
+    double midi;
+    double velocity;
+    int source_line;
+} QueuedEvent;
 
 typedef struct {
     BogBeatCallback cb;
@@ -45,7 +56,16 @@ struct BogScheduler {
     bool running;
     int current_beat;
     double last_scheduled_time;  /* Track last scheduled time to avoid duplicates */
+    double last_query_time;      /* Latest event time queried, or -1 */
     int current_source_line;     /* Source line of currently triggering event */
+    /* Program swap, applied to queries for times >= pending_boundary */
+    const BogProgram* pending_program;
+    double pending_boundary;
+    bool has_pending;
+    bool dispatch_on_time;
+    QueuedEvent* queue;          /* sorted by time */
+    size_t queue_count;
+    size_t queue_capacity;
     BeatCallbackEntry* callbacks;
     size_t callback_count;
     size_t callback_capacity;
@@ -55,9 +75,6 @@ struct BogScheduler {
 struct BogTransitionManager {
     BogScheduler* scheduler;
     double quantization;
-    const BogProgram* pending_program;
-    double pending_boundary;
-    bool has_pending;
 };
 
 static char* dup_string(const char* src)
@@ -116,6 +133,8 @@ BogStateManager* bog_state_manager_create(void)
 {
     BogStateManager* mgr = (BogStateManager*)calloc(
         1, sizeof(BogStateManager));
+    if (mgr)
+        mgr->rng_state = bog_rng_seed_from_clock(mgr);
     return mgr;
 }
 
@@ -243,6 +262,19 @@ bool bog_state_manager_can_trigger(const BogStateManager* manager,
     return (now - last) >= gap;
 }
 
+void bog_state_manager_seed(BogStateManager* manager, uint64_t seed)
+{
+    if (manager)
+        manager->rng_state = seed;
+}
+
+double bog_state_manager_random(BogStateManager* manager)
+{
+    if (!manager)
+        return 0.0;
+    return bog_rng_unit(&manager->rng_state);
+}
+
 /* Scheduler */
 
 static double swing_adjust(double t, double bpm, double swing_amt)
@@ -259,6 +291,10 @@ static void trigger_voice(const BogScheduler* scheduler, const char* voice,
     if (!voice)
         return;
     const BogAudioCallbacks* audio = &scheduler->audio;
+    if (audio->note) {
+        audio->note(audio->userdata, voice, time_value, midi, velocity);
+        return;
+    }
     if (strcmp(voice, "kick") == 0 && audio->kick) {
         audio->kick(audio->userdata, time_value, velocity);
         return;
@@ -290,6 +326,58 @@ static void trigger_voice(const BogScheduler* scheduler, const char* voice,
     if (strcmp(voice, "noise") == 0 && audio->noise) {
         audio->noise(audio->userdata, time_value, velocity);
         return;
+    }
+}
+
+static void clear_queue(BogScheduler* scheduler)
+{
+    for (size_t i = 0; i < scheduler->queue_count; ++i)
+        free(scheduler->queue[i].voice);
+    scheduler->queue_count = 0;
+}
+
+/* Takes ownership of voice */
+static void enqueue_event(BogScheduler* scheduler, char* voice, double time,
+                          double midi, double velocity, int source_line)
+{
+    if (scheduler->queue_count == scheduler->queue_capacity) {
+        size_t new_cap = scheduler->queue_capacity
+            ? scheduler->queue_capacity * 2
+            : 16;
+        QueuedEvent* items = (QueuedEvent*)realloc(
+            scheduler->queue, new_cap * sizeof(QueuedEvent));
+        if (!items) {
+            free(voice);
+            return;
+        }
+        scheduler->queue = items;
+        scheduler->queue_capacity = new_cap;
+    }
+    size_t pos = scheduler->queue_count;
+    while (pos > 0 && scheduler->queue[pos - 1].time > time)
+        pos--;
+    memmove(&scheduler->queue[pos + 1], &scheduler->queue[pos],
+            (scheduler->queue_count - pos) * sizeof(QueuedEvent));
+    scheduler->queue[pos] = (QueuedEvent) { voice, time, midi, velocity,
+                                            source_line };
+    scheduler->queue_count++;
+}
+
+static void dispatch_due_events(BogScheduler* scheduler, double now_seconds)
+{
+    size_t due = 0;
+    while (due < scheduler->queue_count
+           && scheduler->queue[due].time <= now_seconds + 1e-9) {
+        QueuedEvent* ev = &scheduler->queue[due];
+        scheduler->current_source_line = ev->source_line;
+        trigger_voice(scheduler, ev->voice, ev->time, ev->midi, ev->velocity);
+        free(ev->voice);
+        due++;
+    }
+    if (due) {
+        memmove(scheduler->queue, &scheduler->queue[due],
+                (scheduler->queue_count - due) * sizeof(QueuedEvent));
+        scheduler->queue_count -= due;
     }
 }
 
@@ -341,6 +429,7 @@ static void scheduler_init(BogScheduler* scheduler,
     scheduler->grid_beats = 0.25;
     scheduler->current_beat = 0;
     scheduler->last_scheduled_time = -1.0;  /* No events scheduled yet */
+    scheduler->last_query_time = -1.0;
     scheduler->next_callback_handle = 1;
 }
 
@@ -360,6 +449,8 @@ void bog_scheduler_destroy(BogScheduler* scheduler)
 {
     if (!scheduler)
         return;
+    clear_queue(scheduler);
+    free(scheduler->queue);
     free(scheduler->callbacks);
     free(scheduler);
 }
@@ -370,6 +461,18 @@ void bog_scheduler_set_program(BogScheduler* scheduler,
     if (!scheduler)
         return;
     scheduler->program = program;
+}
+
+const BogProgram* bog_scheduler_get_program(const BogScheduler* scheduler)
+{
+    return scheduler ? scheduler->program : NULL;
+}
+
+void bog_scheduler_set_dispatch_on_time(BogScheduler* scheduler,
+                                         bool enabled)
+{
+    if (scheduler)
+        scheduler->dispatch_on_time = enabled;
 }
 
 void bog_scheduler_configure(BogScheduler* scheduler, double bpm,
@@ -394,6 +497,13 @@ void bog_scheduler_start(BogScheduler* scheduler)
     if (scheduler->audio.init)
         scheduler->audio.init(scheduler->audio.userdata);
     scheduler->last_scheduled_time = -1.0;  /* Reset for fresh start */
+    scheduler->last_query_time = -1.0;
+    /* The clock restarts, so a boundary computed before start is stale */
+    if (scheduler->has_pending) {
+        scheduler->program = scheduler->pending_program;
+        scheduler->pending_program = NULL;
+        scheduler->has_pending = false;
+    }
     scheduler->current_source_line = 0;
     scheduler->running = true;
 }
@@ -405,6 +515,7 @@ void bog_scheduler_stop(BogScheduler* scheduler)
     scheduler->running = false;
     scheduler->current_beat = 0;
     scheduler->current_source_line = 0;
+    clear_queue(scheduler);
     notify_beat_callbacks(scheduler, scheduler->current_beat);
 }
 
@@ -462,6 +573,13 @@ void bog_scheduler_remove_beat_callback(BogScheduler* scheduler,
 
 static void scheduler_query_and_schedule(BogScheduler* scheduler, double t)
 {
+    if (scheduler->has_pending && t + 1e-9 >= scheduler->pending_boundary) {
+        scheduler->program = scheduler->pending_program;
+        scheduler->pending_program = NULL;
+        scheduler->has_pending = false;
+    }
+    if (t > scheduler->last_query_time)
+        scheduler->last_query_time = t;
     if (!scheduler->program || !scheduler->builtins)
         return;
     BogArena* arena = bog_arena_create();
@@ -529,11 +647,15 @@ static void scheduler_query_and_schedule(BogScheduler* scheduler, double t)
 
         double scheduled_time = swing_adjust(t, scheduler->bpm,
                                              scheduler->swing);
-        if (voiceStr) {
+        int source_line = solutions.source_lines ? solutions.source_lines[i]
+                                                 : 0;
+        if (voiceStr && scheduler->dispatch_on_time) {
+            enqueue_event(scheduler, voiceStr, scheduled_time, midi, vel,
+                          source_line);
+            voiceStr = NULL;
+        } else if (voiceStr) {
             /* Track source line of the matched event clause */
-            if (solutions.source_lines) {
-                scheduler->current_source_line = solutions.source_lines[i];
-            }
+            scheduler->current_source_line = source_line;
             trigger_voice(scheduler, voiceStr, scheduled_time, midi, vel);
         }
         free(voiceStr);
@@ -545,10 +667,19 @@ static void scheduler_query_and_schedule(BogScheduler* scheduler, double t)
     bog_arena_destroy(arena);
 }
 
+static void query_ahead(BogScheduler* scheduler, double now_seconds);
+
 void bog_scheduler_tick_at(BogScheduler* scheduler, double now_seconds)
 {
-    if (!scheduler || !scheduler->program)
+    if (!scheduler)
         return;
+    if (scheduler->program || scheduler->has_pending)
+        query_ahead(scheduler, now_seconds);
+    dispatch_due_events(scheduler, now_seconds);
+}
+
+static void query_ahead(BogScheduler* scheduler, double now_seconds)
+{
     double ahead = scheduler->lookahead_ms / 1000.0;
     double beat_duration = 60.0 / scheduler->bpm;
     double step = beat_duration * scheduler->grid_beats;
@@ -594,9 +725,6 @@ static void transition_manager_init(BogTransitionManager* manager,
     manager->scheduler = scheduler;
     manager->quantization = (quantization_beats > 0.0) ? quantization_beats
                                                        : 4.0;
-    manager->pending_program = NULL;
-    manager->pending_boundary = 0.0;
-    manager->has_pending = false;
 }
 
 BogTransitionManager*
@@ -618,49 +746,55 @@ void bog_transition_manager_destroy(BogTransitionManager* manager)
     free(manager);
 }
 
+/* The swap lands on the first bar line at or after now that no query has
+ * reached yet, so no event from that bar on comes from the old program. */
 void bog_transition_manager_schedule(BogTransitionManager* manager,
                                          const BogProgram* program)
 {
-    if (!manager || !program)
+    if (!manager || !manager->scheduler || !program)
         return;
-    double now = bog_scheduler_now(manager->scheduler);
-    double bpm = manager->scheduler ? manager->scheduler->bpm : 120.0;
-    double beat_duration = 60.0 / (bpm > 0.0 ? bpm : 120.0);
-    double quant_duration = beat_duration * manager->quantization;
-    double current_phase = fmod(now, quant_duration);
-    double time_to_next = (current_phase == 0.0)
-        ? 0.0
-        : (quant_duration - current_phase);
-    manager->pending_boundary = now + time_to_next;
-    manager->pending_program = program;
-    manager->has_pending = true;
+    BogScheduler* scheduler = manager->scheduler;
+    double now = bog_scheduler_now(scheduler);
+    double bpm = scheduler->bpm > 0.0 ? scheduler->bpm : 120.0;
+    double quant_duration = (60.0 / bpm) * manager->quantization;
+    double bar = ceil(now / quant_duration - 1e-9);
+    if (scheduler->last_query_time >= 0.0) {
+        double after_queried
+            = floor(scheduler->last_query_time / quant_duration + 1e-9) + 1.0;
+        if (after_queried > bar)
+            bar = after_queried;
+    }
+    scheduler->pending_boundary = bar * quant_duration;
+    scheduler->pending_program = program;
+    scheduler->has_pending = true;
 }
 
 void bog_transition_manager_cancel(BogTransitionManager* manager)
 {
-    if (!manager)
+    if (!manager || !manager->scheduler)
         return;
-    manager->pending_program = NULL;
-    manager->pending_boundary = 0.0;
-    manager->has_pending = false;
+    manager->scheduler->pending_program = NULL;
+    manager->scheduler->pending_boundary = 0.0;
+    manager->scheduler->has_pending = false;
 }
 
 bool bog_transition_manager_has_pending(
     const BogTransitionManager* manager)
 {
-    return manager && manager->has_pending;
+    return manager && manager->scheduler && manager->scheduler->has_pending;
 }
 
+/* Fallback for when no query reaches the boundary, e.g. a stopped scheduler */
 void bog_transition_manager_process(BogTransitionManager* manager,
                                         double now_seconds)
 {
-    if (!manager || !manager->has_pending)
+    if (!bog_transition_manager_has_pending(manager))
         return;
-    if (now_seconds + 1e-9 >= manager->pending_boundary) {
-        bog_scheduler_set_program(manager->scheduler,
-                                      manager->pending_program);
-        manager->pending_program = NULL;
-        manager->has_pending = false;
-        manager->pending_boundary = 0.0;
+    BogScheduler* scheduler = manager->scheduler;
+    if (now_seconds + 1e-9 >= scheduler->pending_boundary) {
+        scheduler->program = scheduler->pending_program;
+        scheduler->pending_program = NULL;
+        scheduler->has_pending = false;
+        scheduler->pending_boundary = 0.0;
     }
 }

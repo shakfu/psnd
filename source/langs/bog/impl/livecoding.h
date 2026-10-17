@@ -27,6 +27,10 @@ const BogProgram*
 bog_live_evaluator_program(const BogLiveEvaluator* evaluator);
 void bog_live_evaluator_set_scheduler(BogLiveEvaluator* evaluator,
                                           BogScheduler* scheduler);
+/* With a transition manager, evaluate swaps on its next bar line instead of
+ * at once. The transition must drive the evaluator's scheduler. */
+void bog_live_evaluator_set_transition(BogLiveEvaluator* evaluator,
+                                       BogTransitionManager* transition);
 
 typedef void (*BogLiveValidatedCallback)(bool success,
                                              const BogProgram* program,

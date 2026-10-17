@@ -40,9 +40,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Added
 
+- **Bog plays any voice atom**: `BogAudioCallbacks.note` receives every event with its voice name. Previously only the eight built-in names reached a callback, and the scheduler dropped other atoms. Both psnd hosts use it, with one table in `bog_host.h`. Unknown voices play `Pitch` on channel 1. The eight named callbacks remain for hosts that do not set `note`.
+
 - **`make test-asan`**: runs the `test-tsf` suite with `PSND_ENABLE_ASAN` in `build-asan/`, so the cached option stays out of `make test`. ASan builds skip stripping `psnd`, so ASan stack traces show function names. All 83 tests pass under it.
 
 ### Fixed
+
+- **Bog recursion was broken, and a self-recursive clause crashed the process**: the resolver restarted clause renaming at 0 on every call, so each recursion level reused the variable names of the level above. `count(N) :- N > 0, M is N-1, count(M).` failed beyond one level. `event(V,P,X,T) :- event(V,P,X,T).` bound a variable to itself, and substitution then recursed until the stack overflowed. Renaming is now per query. Queries also stop at `BOG_MAX_DEPTH` (512), `BOG_MAX_STEPS` (20000) or `BOG_MAX_SOLUTIONS` (1024) and set `BogSolutions.truncated`. A runaway query costs at most about 40 ms.
+
+- **Bog's random builtins shared the C library stream**: `prob`, `pick`, `rand` and `randint` used `rand()`, which was never seeded. Every launch played the same sequence, and Joy's `srand` or MHS's FFI changed what Bog played. Each `BogStateManager` now owns a clock-seeded stream; `bog_state_manager_seed` makes a run repeatable.
+
+- **Bog program swaps landed up to one lookahead after the bar line**: the swap happened when `now` reached the bar, but events past the bar had already been queried from the old program. The scheduler now swaps when a query reaches the bar. If the bar has already been queried, the swap moves to the next bar.
+
+- **Bog notes played early**: the scheduler queries events up to one grid step plus the lookahead ahead (175 ms at 120 BPM). psnd's hosts ignored the event time and sent note-on at query time. `bog_scheduler_set_dispatch_on_time` now holds events until they are due, and both hosts enable it. The scheduler holds the queue, not each host, so the editor and the REPL share one tested implementation.
+
+- **Bog REPL edits raced the tick thread**: `bog_live_evaluator_evaluate` ran on the REPL thread, freed the playing program's arena, and replaced the scheduler's program while `bog_async` was resolving against it. That was a use-after-free. The tick thread now holds a lock for each tick, and the REPL holds it to evaluate and to change tempo or swing. The lock lives in `bog_async`, not the scheduler, because only the REPL ticks from a second thread. REPL edits now go through the transition manager and land on the next bar. The evaluator keeps the playing program's arena until the scheduler swaps, and frees a pending program that a later edit replaces before it plays.
+
+- **A Bog swap scheduled before `bog_scheduler_start` waited on a stale clock**: hosts restart the clock in `start`, so a boundary computed earlier could lie hours ahead. In the editor, the first eval computed its boundary from the time since boot. `start` now applies a pending swap at once.
+
+- **Bog in the editor recursed on its first tick**: `bog_audio_time` called `bog_scheduler_now`, which calls the time callback, which is `bog_audio_time`. It now reads a monotonic clock.
 
 - **A hung-up terminal could leave the editor spinning**: with SIGHUP ignored, `read()` on a hung-up tty returns 0 at once, forever, which looked like raw mode's 100 ms idle timeout. `terminal_read_key` now checks `poll()` for `POLLHUP` after a 0-byte read and returns -1. `editor_process_keypress` and `modal_process_keypress` now return that -1, and the editor loop and terminal host stop on it.
 

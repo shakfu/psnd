@@ -30,6 +30,7 @@
 #include "bog.h"
 #include "scheduler.h"
 #include "livecoding.h"
+#include "bog_host.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -105,6 +106,7 @@ static void print_bog_repl_help(void) {
     printf("Available Voices:\n");
     printf("  kick, snare, hat, clap, noise   (drums, channel 10)\n");
     printf("  sine, square, triangle          (melodic, channel 1)\n");
+    printf("  any other atom                  (Pitch on channel 1)\n");
     printf("\n");
     printf("Examples:\n");
     printf("  :d kick event(kick, 36, 0.9, T) :- every(T, 1.0).\n");
@@ -117,17 +119,6 @@ static void print_bog_repl_help(void) {
 /* ============================================================================
  * Bog REPL State
  * ============================================================================ */
-
-/* MIDI note mappings for drum sounds (GM drums, channel 10) */
-#define BOG_MIDI_KICK  36
-#define BOG_MIDI_SNARE 38
-#define BOG_MIDI_HAT   42
-#define BOG_MIDI_CLAP  39
-#define BOG_MIDI_NOISE 46
-
-/* MIDI channels */
-#define BOG_DRUM_CHANNEL  10
-#define BOG_SYNTH_CHANNEL 1
 
 /* Bog REPL state */
 static BogArena *g_bog_repl_arena = NULL;
@@ -143,6 +134,15 @@ static double g_bog_repl_swing = 0.0;
 
 /* Forward declaration */
 static void bog_start_async(void);
+
+/* Evaluate under the tick lock: the swap and the old program's release must
+ * not overlap a tick on the async thread. */
+static bool bog_repl_evaluate(const char *code, char **error) {
+    bog_async_lock();
+    bool ok = bog_live_evaluator_evaluate(g_bog_repl_evaluator, code, error);
+    bog_async_unlock();
+    return ok;
+}
 
 /* ============================================================================
  * Named Slots for Rule Management
@@ -268,10 +268,10 @@ static int bog_slot_evaluate(void) {
 
     if (g_bog_repl_evaluator) {
         if (*program) {
-            ok = bog_live_evaluator_evaluate(g_bog_repl_evaluator, program, &error);
+            ok = bog_repl_evaluate(program, &error);
         } else {
             /* Empty program - clear scheduler */
-            ok = bog_live_evaluator_evaluate(g_bog_repl_evaluator, "% empty", &error);
+            ok = bog_repl_evaluate("% empty", &error);
         }
     }
 
@@ -297,106 +297,28 @@ static int bog_slot_evaluate(void) {
  * Audio Callbacks
  * ============================================================================ */
 
-static int vel_to_midi(double velocity) {
-    int v = (int)(velocity * 127.0);
-    if (v < 0) v = 0;
-    if (v > 127) v = 127;
-    return v;
-}
-
 /* Track start time for audio clock */
 static double g_bog_start_time = 0.0;
-
-static double get_wall_time(void) {
-#ifdef _WIN32
-    static LARGE_INTEGER freq = {0};
-    LARGE_INTEGER counter;
-    if (freq.QuadPart == 0) {
-        QueryPerformanceFrequency(&freq);
-    }
-    QueryPerformanceCounter(&counter);
-    return (double)counter.QuadPart / (double)freq.QuadPart;
-#else
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
-#endif
-}
 
 static void repl_audio_init(void *userdata) {
     (void)userdata;
     /* Initialize start time for the audio clock */
-    g_bog_start_time = get_wall_time();
+    g_bog_start_time = bog_wall_time();
 }
 
 static double repl_audio_time(void *userdata) {
     (void)userdata;
-    return get_wall_time() - g_bog_start_time;
+    return bog_wall_time() - g_bog_start_time;
 }
 
-static void repl_audio_kick(void *userdata, double time, double velocity) {
+static void repl_audio_note(void *userdata, const char *voice, double time,
+                            double midi, double velocity) {
     (void)userdata;
-    (void)time;
+    (void)time;  /* the scheduler calls this when the event is due */
     if (!g_bog_repl_shared) return;
-    shared_send_note_on(g_bog_repl_shared, BOG_DRUM_CHANNEL, BOG_MIDI_KICK, vel_to_midi(velocity));
-}
-
-static void repl_audio_snare(void *userdata, double time, double velocity) {
-    (void)userdata;
-    (void)time;
-    if (!g_bog_repl_shared) return;
-    shared_send_note_on(g_bog_repl_shared, BOG_DRUM_CHANNEL, BOG_MIDI_SNARE, vel_to_midi(velocity));
-}
-
-static void repl_audio_hat(void *userdata, double time, double velocity) {
-    (void)userdata;
-    (void)time;
-    if (!g_bog_repl_shared) return;
-    shared_send_note_on(g_bog_repl_shared, BOG_DRUM_CHANNEL, BOG_MIDI_HAT, vel_to_midi(velocity));
-}
-
-static void repl_audio_clap(void *userdata, double time, double velocity) {
-    (void)userdata;
-    (void)time;
-    if (!g_bog_repl_shared) return;
-    shared_send_note_on(g_bog_repl_shared, BOG_DRUM_CHANNEL, BOG_MIDI_CLAP, vel_to_midi(velocity));
-}
-
-static void repl_audio_sine(void *userdata, double time, double midi, double velocity) {
-    (void)userdata;
-    (void)time;
-    if (!g_bog_repl_shared) return;
-    int pitch = (int)midi;
-    if (pitch < 0) pitch = 0;
-    if (pitch > 127) pitch = 127;
-    shared_send_note_on(g_bog_repl_shared, BOG_SYNTH_CHANNEL, pitch, vel_to_midi(velocity));
-}
-
-static void repl_audio_square(void *userdata, double time, double midi, double velocity) {
-    (void)userdata;
-    (void)time;
-    if (!g_bog_repl_shared) return;
-    int pitch = (int)midi;
-    if (pitch < 0) pitch = 0;
-    if (pitch > 127) pitch = 127;
-    shared_send_note_on(g_bog_repl_shared, BOG_SYNTH_CHANNEL + 1, pitch, vel_to_midi(velocity));
-}
-
-static void repl_audio_triangle(void *userdata, double time, double midi, double velocity) {
-    (void)userdata;
-    (void)time;
-    if (!g_bog_repl_shared) return;
-    int pitch = (int)midi;
-    if (pitch < 0) pitch = 0;
-    if (pitch > 127) pitch = 127;
-    shared_send_note_on(g_bog_repl_shared, BOG_SYNTH_CHANNEL + 2, pitch, vel_to_midi(velocity));
-}
-
-static void repl_audio_noise(void *userdata, double time, double velocity) {
-    (void)userdata;
-    (void)time;
-    if (!g_bog_repl_shared) return;
-    shared_send_note_on(g_bog_repl_shared, BOG_DRUM_CHANNEL, BOG_MIDI_NOISE, vel_to_midi(velocity));
+    int channel, note;
+    bog_voice_lookup(voice, midi, &channel, &note);
+    shared_send_note_on(g_bog_repl_shared, channel, note, bog_vel_to_midi(velocity));
 }
 
 /* ============================================================================
@@ -476,7 +398,9 @@ static int bog_process_command(const char *input) {
         if (bpm >= 20.0 && bpm <= 400.0) {
             g_bog_repl_tempo = bpm;
             if (g_bog_repl_scheduler) {
+                bog_async_lock();
                 bog_scheduler_configure(g_bog_repl_scheduler, bpm, g_bog_repl_swing, 50.0, 0.25);
+                bog_async_unlock();
             }
             printf("Tempo: %.1f BPM\n", bpm);
         } else {
@@ -491,7 +415,9 @@ static int bog_process_command(const char *input) {
         if (swing >= 0.0 && swing <= 1.0) {
             g_bog_repl_swing = swing;
             if (g_bog_repl_scheduler) {
+                bog_async_lock();
                 bog_scheduler_configure(g_bog_repl_scheduler, g_bog_repl_tempo, swing, 50.0, 0.25);
+                bog_async_unlock();
             }
             printf("Swing: %.2f\n", swing);
         } else {
@@ -522,7 +448,7 @@ static int bog_process_command(const char *input) {
                     /* Evaluate */
                     char *error = NULL;
                     if (g_bog_repl_evaluator) {
-                        if (bog_live_evaluator_evaluate(g_bog_repl_evaluator, code, &error)) {
+                        if (bog_repl_evaluate(code, &error)) {
                             printf("Loaded: %s\n", path);
                             if (!g_bog_repl_running && g_bog_repl_scheduler) {
                                 bog_scheduler_start(g_bog_repl_scheduler);
@@ -723,7 +649,7 @@ static void bog_repl_loop_pipe(void) {
         /* Evaluate as Bog code */
         char *error = NULL;
         if (g_bog_repl_evaluator) {
-            if (bog_live_evaluator_evaluate(g_bog_repl_evaluator, line, &error)) {
+            if (bog_repl_evaluate(line, &error)) {
                 printf("ok\n");
                 if (!g_bog_repl_running && g_bog_repl_scheduler) {
                     bog_scheduler_start(g_bog_repl_scheduler);
@@ -796,7 +722,7 @@ static void bog_repl_loop(editor_ctx_t *syntax_ctx) {
         /* Evaluate Bog code */
         char *error = NULL;
         if (g_bog_repl_evaluator) {
-            if (bog_live_evaluator_evaluate(g_bog_repl_evaluator, input, &error)) {
+            if (bog_repl_evaluate(input, &error)) {
                 printf("ok\n");
                 if (!g_bog_repl_running && g_bog_repl_scheduler) {
                     bog_scheduler_start(g_bog_repl_scheduler);
@@ -872,14 +798,7 @@ static void *bog_cb_init(const SharedReplArgs *args) {
         .userdata = NULL,
         .init = repl_audio_init,
         .time = repl_audio_time,
-        .kick = repl_audio_kick,
-        .snare = repl_audio_snare,
-        .hat = repl_audio_hat,
-        .clap = repl_audio_clap,
-        .sine = repl_audio_sine,
-        .square = repl_audio_square,
-        .triangle = repl_audio_triangle,
-        .noise = repl_audio_noise,
+        .note = repl_audio_note,
     };
 
     /* Create scheduler */
@@ -895,6 +814,8 @@ static void *bog_cb_init(const SharedReplArgs *args) {
 
     /* Configure scheduler */
     bog_scheduler_configure(g_bog_repl_scheduler, g_bog_repl_tempo, g_bog_repl_swing, 50.0, 0.25);
+    /* shared_send_note_on plays immediately: hold events until due */
+    bog_scheduler_set_dispatch_on_time(g_bog_repl_scheduler, true);
 
     /* Create transition manager */
     g_bog_repl_transition = bog_transition_manager_create(g_bog_repl_scheduler, 4.0);
@@ -923,6 +844,8 @@ static void *bog_cb_init(const SharedReplArgs *args) {
         g_bog_repl_arena = NULL;
         return NULL;
     }
+    /* Swaps land on the next bar line */
+    bog_live_evaluator_set_transition(g_bog_repl_evaluator, g_bog_repl_transition);
 
     /* Initialize shared context for MIDI/audio */
     g_bog_repl_shared = calloc(1, sizeof(SharedContext));
@@ -1087,7 +1010,7 @@ static int bog_load_file(const char *path) {
     char *error = NULL;
     int success = 0;
     if (g_bog_repl_evaluator) {
-        success = bog_live_evaluator_evaluate(g_bog_repl_evaluator, code, &error);
+        success = bog_repl_evaluate(code, &error);
     }
     free(code);
 

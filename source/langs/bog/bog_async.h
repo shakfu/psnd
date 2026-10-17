@@ -54,6 +54,16 @@ int bog_async_start(struct BogScheduler *scheduler,
 void bog_async_stop(void);
 
 /**
+ * @brief Exclude the tick thread while the caller touches the scheduler,
+ * transition manager, state manager or the programs they reference.
+ *
+ * The tick thread holds the same lock for each tick. Do not call other
+ * bog_async functions while holding it: bog_async_stop() would deadlock.
+ */
+void bog_async_lock(void);
+void bog_async_unlock(void);
+
+/**
  * @brief Check if the tick thread is running.
  * @return Non-zero if running.
  */

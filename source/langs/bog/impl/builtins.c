@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "builtins.h"
 #include "internal.h"
@@ -310,15 +311,46 @@ static bool builtin_cooldown(BogTerm** args, size_t arity, BogEnv* env,
     return true;
 }
 
+uint64_t bog_rng_seed_from_clock(const void* salt)
+{
+    struct timespec ts = { 0, 0 };
+    timespec_get(&ts, TIME_UTC);
+    uint64_t state = ((uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec)
+        ^ (uint64_t)(uintptr_t)salt;
+    return state;
+}
+
+double bog_rng_unit(uint64_t* state)
+{
+    uint64_t z = (*state += 0x9E3779B97F4A7C15ull);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    z ^= z >> 31;
+    return (double)(z >> 11) * (1.0 / 9007199254740992.0);
+}
+
+/* Draw from the instance's stream. Callers without a state manager share one
+ * fallback stream, which is not thread-safe. */
+static double next_random(const BogContext* ctx)
+{
+    static uint64_t fallback_state;
+    static bool fallback_seeded;
+    if (ctx && ctx->state_manager)
+        return bog_state_manager_random(ctx->state_manager);
+    if (!fallback_seeded) {
+        fallback_state = bog_rng_seed_from_clock(&fallback_state);
+        fallback_seeded = true;
+    }
+    return bog_rng_unit(&fallback_state);
+}
+
 static bool builtin_prob(BogTerm** args, size_t arity, BogEnv* env,
                          const BogContext* ctx, BogBuiltinResult* out,
                          BogArena* arena)
 {
     (void)arity;
-    (void)ctx;
-    (void)arena;
     double p = eval_number(args[0], env, arena);
-    double r = (double)rand() / (double)RAND_MAX;
+    double r = next_random(ctx);
     if (r < p)
         builtin_record_env(out, env);
     return true;
@@ -348,12 +380,11 @@ static bool builtin_pick(BogTerm** args, size_t arity, BogEnv* env,
                          BogArena* arena)
 {
     (void)arity;
-    (void)ctx;
     size_t length = 0;
     BogTerm** list = eval_list(args[0], env, arena, &length);
     if (!list || length == 0 || args[1]->type != CPROLOG_TERM_VAR)
         return true;
-    size_t idx = (size_t)(rand() % length);
+    size_t idx = (size_t)(next_random(ctx) * (double)length);
     BogEnv tmp = bog_env_clone(env);
     if (bog_unify(args[1], list[idx], &tmp, arena))
         builtin_record_env(out, &tmp);
@@ -391,12 +422,11 @@ static bool builtin_rand(BogTerm** args, size_t arity, BogEnv* env,
                          BogArena* arena)
 {
     (void)arity;
-    (void)ctx;
     if (args[2]->type != CPROLOG_TERM_VAR)
         return true;
     double min = eval_number(args[0], env, arena);
     double max = eval_number(args[1], env, arena);
-    double value = min + ((double)rand() / (double)RAND_MAX) * (max - min);
+    double value = min + next_random(ctx) * (max - min);
     BogTerm* num = bog_make_num(arena, value);
     BogEnv tmp = bog_env_clone(env);
     bog_env_set(&tmp, args[2]->value.atom, num);
@@ -410,7 +440,6 @@ static bool builtin_randint(BogTerm** args, size_t arity, BogEnv* env,
                             BogBuiltinResult* out, BogArena* arena)
 {
     (void)arity;
-    (void)ctx;
     if (args[2]->type != CPROLOG_TERM_VAR)
         return true;
     int min = (int)floor(eval_number(args[0], env, arena));
@@ -418,7 +447,7 @@ static bool builtin_randint(BogTerm** args, size_t arity, BogEnv* env,
     int span = max - min;
     if (span <= 0)
         span = 1;
-    int value = min + (rand() % span);
+    int value = min + (int)(next_random(ctx) * (double)span);
     BogTerm* num = bog_make_num(arena, (double)value);
     BogEnv tmp = bog_env_clone(env);
     bog_env_set(&tmp, args[2]->value.atom, num);

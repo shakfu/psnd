@@ -3,6 +3,10 @@
  */
 #include "test_framework.h"
 
+#include <stdlib.h>
+
+#include "bog.h"
+#include "builtins.h"
 #include "scheduler.h"
 
 /* Cycle State */
@@ -179,6 +183,104 @@ TEST(state_manager_allows_rebuild_after_reset)
     TEST_PASS();
 }
 
+/* Random stream */
+
+TEST(state_manager_same_seed_repeats_sequence)
+{
+    BogStateManager* a = bog_state_manager_create();
+    BogStateManager* b = bog_state_manager_create();
+    bog_state_manager_seed(a, 42);
+    bog_state_manager_seed(b, 42);
+    for (int i = 0; i < 16; i++) {
+        double x = bog_state_manager_random(a);
+        ASSERT_GTE(x, 0.0);
+        ASSERT_LT(x, 1.0);
+        ASSERT_NEAR(x, bog_state_manager_random(b), 0.0);
+    }
+    bog_state_manager_destroy(a);
+    bog_state_manager_destroy(b);
+    TEST_PASS();
+}
+
+TEST(state_manager_streams_are_independent)
+{
+    BogStateManager* a = bog_state_manager_create();
+    BogStateManager* other = bog_state_manager_create();
+    BogStateManager* ref = bog_state_manager_create();
+    bog_state_manager_seed(a, 7);
+    bog_state_manager_seed(ref, 7);
+    for (int i = 0; i < 16; i++) {
+        bog_state_manager_random(other);
+        srand((unsigned)i);  /* the C library stream must not matter */
+        ASSERT_NEAR(bog_state_manager_random(a),
+                    bog_state_manager_random(ref), 0.0);
+    }
+    bog_state_manager_destroy(a);
+    bog_state_manager_destroy(other);
+    bog_state_manager_destroy(ref);
+    TEST_PASS();
+}
+
+TEST(state_manager_unseeded_instances_differ)
+{
+    BogStateManager* a = bog_state_manager_create();
+    BogStateManager* b = bog_state_manager_create();
+    ASSERT_TRUE(bog_state_manager_random(a) != bog_state_manager_random(b));
+    bog_state_manager_destroy(a);
+    bog_state_manager_destroy(b);
+    TEST_PASS();
+}
+
+/* rand/3 through the resolver, drawing from the context's state manager */
+static double query_rand(BogStateManager* sm)
+{
+    BogArena* arena = bog_arena_create();
+    BogBuiltins* builtins = bog_create_builtins(arena);
+    char* error = NULL;
+    BogProgram* program = bog_parse_program("q(X) :- rand(0, 1, X).", arena,
+                                            &error);
+    free(error);
+    BogTerm* args[1] = { bog_make_var(arena, "X") };
+    BogGoal goal;
+    goal.kind = CPROLOG_GOAL_TERM;
+    goal.data.term = bog_make_compound(arena, "q", args, 1);
+    BogGoalList goals = { &goal, 1 };
+    BogContext ctx;
+    ctx.bpm = 120.0;
+    ctx.state_manager = sm;
+    BogEnv env;
+    bog_env_init(&env);
+    BogSolutions solutions = { 0 };
+    bog_resolve(&goals, &env, program, &ctx, builtins, &solutions, arena);
+    double x = -1.0;
+    if (solutions.count == 1)
+        x = bog_subst_term(args[0], &solutions.envs[0], arena)->value.number;
+    for (size_t i = 0; i < solutions.count; i++)
+        bog_env_free(&solutions.envs[i]);
+    free(solutions.envs);
+    free(solutions.source_lines);
+    bog_env_free(&env);
+    bog_arena_destroy(arena);
+    return x;
+}
+
+TEST(rand_builtin_uses_state_manager_stream)
+{
+    BogStateManager* a = bog_state_manager_create();
+    BogStateManager* b = bog_state_manager_create();
+    bog_state_manager_seed(a, 99);
+    bog_state_manager_seed(b, 99);
+    srand(1);
+    double x = query_rand(a);
+    srand(2);
+    double y = query_rand(b);
+    ASSERT_GTE(x, 0.0);
+    ASSERT_NEAR(x, y, 0.0);
+    bog_state_manager_destroy(a);
+    bog_state_manager_destroy(b);
+    TEST_PASS();
+}
+
 int main(void)
 {
     printf("State Manager Tests\n");
@@ -200,6 +302,12 @@ int main(void)
     RUN_TEST(state_manager_reset_clears_cycle_state);
     RUN_TEST(state_manager_reset_clears_cooldown_state);
     RUN_TEST(state_manager_allows_rebuild_after_reset);
+
+    /* Random stream */
+    RUN_TEST(state_manager_same_seed_repeats_sequence);
+    RUN_TEST(state_manager_streams_are_independent);
+    RUN_TEST(state_manager_unseeded_instances_differ);
+    RUN_TEST(rand_builtin_uses_state_manager_stream);
 
     TEST_SUMMARY();
     return TEST_EXIT_CODE();

@@ -27,3 +27,23 @@ add_bog_test(builtins)
 add_bog_test(state_manager)
 add_bog_test(resolution)
 add_bog_test(livecoding)
+add_bog_test(scheduler)
+
+# bog_async.c is built only into the REPL, so this test compiles it directly.
+# POSIX-only test code (clock_gettime, nanosleep).
+if(UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(test_bog_async test_async.c ${PSND_ROOT_DIR}/source/langs/bog/bog_async.c)
+    target_link_libraries(test_bog_async PRIVATE bog test_framework Threads::Threads m)
+    target_include_directories(test_bog_async PRIVATE
+        ${PSND_ROOT_DIR}/source/langs/bog
+        ${PSND_ROOT_DIR}/source/langs/bog/impl
+        ${PSND_ROOT_DIR}/source/testing
+    )
+    add_test(
+        NAME bog_async
+        COMMAND $<TARGET_FILE:test_bog_async>
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    )
+    set_tests_properties(bog_async PROPERTIES LABELS "unit")
+endif()

@@ -3,13 +3,7 @@
  * Implements the LokiLangOps interface to integrate the Bog Prolog-based
  * music live coding language with the Loki editor.
  *
- * MIDI voice mapping (GM drums on channel 10):
- *   kick     -> MIDI note 36 (Bass Drum 1)
- *   snare    -> MIDI note 38 (Acoustic Snare)
- *   hat      -> MIDI note 42 (Closed Hi-Hat)
- *   clap     -> MIDI note 39 (Hand Clap)
- *   noise    -> MIDI note 46 (Open Hi-Hat)
- *   sine/square/triangle -> melodic notes (channel 1)
+ * Voice-to-MIDI mapping: see bog_host.h.
  */
 
 #include <stdio.h>
@@ -26,6 +20,7 @@
 #include "bog.h"
 #include "scheduler.h"
 #include "livecoding.h"
+#include "bog_host.h"
 
 /* Shared backend for MIDI/audio */
 #include "context.h"
@@ -36,17 +31,6 @@
 
 /* Error buffer size */
 #define BOG_ERROR_BUFSIZE 512
-
-/* MIDI note mappings for drum sounds (GM drums, channel 10) */
-#define BOG_MIDI_KICK  36   /* Bass Drum 1 */
-#define BOG_MIDI_SNARE 38   /* Acoustic Snare */
-#define BOG_MIDI_HAT   42   /* Closed Hi-Hat */
-#define BOG_MIDI_CLAP  39   /* Hand Clap */
-#define BOG_MIDI_NOISE 46   /* Open Hi-Hat */
-
-/* MIDI channels */
-#define BOG_DRUM_CHANNEL  10  /* GM drums */
-#define BOG_SYNTH_CHANNEL 1   /* Melodic sounds */
 
 /* ======================= Internal State ======================= */
 
@@ -64,10 +48,8 @@ struct LokiBogState {
     int running;
     double tempo;
     double swing;
+    double start_time;  /* bog_wall_time() at scheduler start */
 };
-
-/* Global pointer to current Bog state (for audio callbacks) */
-static struct LokiBogState *g_bog_state = NULL;
 
 /* Get Bog state from editor context */
 static struct LokiBogState* get_bog_state(editor_ctx_t *ctx) {
@@ -88,91 +70,25 @@ static void set_error(struct LokiBogState *state, const char *msg) {
 
 /* ======================= Audio Callbacks ======================= */
 
-/* Convert velocity (0.0-1.0) to MIDI velocity (0-127) */
-static int vel_to_midi(double velocity) {
-    int v = (int)(velocity * 127.0);
-    if (v < 0) v = 0;
-    if (v > 127) v = 127;
-    return v;
-}
-
 static void bog_audio_init(void *userdata) {
-    (void)userdata;
-    /* Nothing to initialize */
+    struct LokiBogState *state = (struct LokiBogState *)userdata;
+    if (state) state->start_time = bog_wall_time();
 }
 
 static double bog_audio_time(void *userdata) {
-    (void)userdata;
-    struct LokiBogState *state = g_bog_state;
-    if (!state || !state->scheduler) return 0.0;
-    return bog_scheduler_now(state->scheduler);
+    struct LokiBogState *state = (struct LokiBogState *)userdata;
+    if (!state) return 0.0;
+    return bog_wall_time() - state->start_time;
 }
 
-static void bog_audio_kick(void *userdata, double time, double velocity) {
-    (void)time;
+static void bog_audio_note(void *userdata, const char *voice, double time,
+                           double midi, double velocity) {
+    (void)time;  /* the scheduler calls this when the event is due */
     struct LokiBogState *state = (struct LokiBogState *)userdata;
     if (!state || !state->shared) return;
-    shared_send_note_on(state->shared, BOG_DRUM_CHANNEL, BOG_MIDI_KICK, vel_to_midi(velocity));
-}
-
-static void bog_audio_snare(void *userdata, double time, double velocity) {
-    (void)time;
-    struct LokiBogState *state = (struct LokiBogState *)userdata;
-    if (!state || !state->shared) return;
-    shared_send_note_on(state->shared, BOG_DRUM_CHANNEL, BOG_MIDI_SNARE, vel_to_midi(velocity));
-}
-
-static void bog_audio_hat(void *userdata, double time, double velocity) {
-    (void)time;
-    struct LokiBogState *state = (struct LokiBogState *)userdata;
-    if (!state || !state->shared) return;
-    shared_send_note_on(state->shared, BOG_DRUM_CHANNEL, BOG_MIDI_HAT, vel_to_midi(velocity));
-}
-
-static void bog_audio_clap(void *userdata, double time, double velocity) {
-    (void)time;
-    struct LokiBogState *state = (struct LokiBogState *)userdata;
-    if (!state || !state->shared) return;
-    shared_send_note_on(state->shared, BOG_DRUM_CHANNEL, BOG_MIDI_CLAP, vel_to_midi(velocity));
-}
-
-static void bog_audio_sine(void *userdata, double time, double midi, double velocity) {
-    (void)time;
-    struct LokiBogState *state = (struct LokiBogState *)userdata;
-    if (!state || !state->shared) return;
-    int pitch = (int)midi;
-    if (pitch < 0) pitch = 0;
-    if (pitch > 127) pitch = 127;
-    shared_send_note_on(state->shared, BOG_SYNTH_CHANNEL, pitch, vel_to_midi(velocity));
-}
-
-static void bog_audio_square(void *userdata, double time, double midi, double velocity) {
-    (void)time;
-    struct LokiBogState *state = (struct LokiBogState *)userdata;
-    if (!state || !state->shared) return;
-    int pitch = (int)midi;
-    if (pitch < 0) pitch = 0;
-    if (pitch > 127) pitch = 127;
-    /* Use channel 2 for square wave to distinguish from sine */
-    shared_send_note_on(state->shared, BOG_SYNTH_CHANNEL + 1, pitch, vel_to_midi(velocity));
-}
-
-static void bog_audio_triangle(void *userdata, double time, double midi, double velocity) {
-    (void)time;
-    struct LokiBogState *state = (struct LokiBogState *)userdata;
-    if (!state || !state->shared) return;
-    int pitch = (int)midi;
-    if (pitch < 0) pitch = 0;
-    if (pitch > 127) pitch = 127;
-    /* Use channel 3 for triangle wave */
-    shared_send_note_on(state->shared, BOG_SYNTH_CHANNEL + 2, pitch, vel_to_midi(velocity));
-}
-
-static void bog_audio_noise(void *userdata, double time, double velocity) {
-    (void)time;
-    struct LokiBogState *state = (struct LokiBogState *)userdata;
-    if (!state || !state->shared) return;
-    shared_send_note_on(state->shared, BOG_DRUM_CHANNEL, BOG_MIDI_NOISE, vel_to_midi(velocity));
+    int channel, note;
+    bog_voice_lookup(voice, midi, &channel, &note);
+    shared_send_note_on(state->shared, channel, note, bog_vel_to_midi(velocity));
 }
 
 /* ======================= Lifecycle Functions ======================= */
@@ -231,14 +147,7 @@ static int bog_lang_init(editor_ctx_t *ctx) {
         .userdata = state,
         .init = bog_audio_init,
         .time = bog_audio_time,
-        .kick = bog_audio_kick,
-        .snare = bog_audio_snare,
-        .hat = bog_audio_hat,
-        .clap = bog_audio_clap,
-        .sine = bog_audio_sine,
-        .square = bog_audio_square,
-        .triangle = bog_audio_triangle,
-        .noise = bog_audio_noise,
+        .note = bog_audio_note,
     };
 
     /* Create scheduler */
@@ -252,8 +161,10 @@ static int bog_lang_init(editor_ctx_t *ctx) {
         return -1;
     }
 
-    /* Configure scheduler */
+    /* Configure scheduler. shared_send_note_on plays immediately, so the
+     * scheduler holds queried events until they are due. */
     bog_scheduler_configure(state->scheduler, state->tempo, state->swing, 50.0, 0.25);
+    bog_scheduler_set_dispatch_on_time(state->scheduler, true);
 
     /* Create transition manager (quantization of 4 beats = 1 bar) */
     state->transition_manager = bog_transition_manager_create(state->scheduler, 4.0);
@@ -282,9 +193,6 @@ static int bog_lang_init(editor_ctx_t *ctx) {
         return -1;
     }
 
-    /* Set global state for audio callbacks */
-    g_bog_state = state;
-
     state->initialized = 1;
     set_error(state, NULL);
 
@@ -296,11 +204,6 @@ static void bog_lang_cleanup(editor_ctx_t *ctx) {
 
     struct LokiBogState *state = get_bog_state(ctx);
     if (!state) return;
-
-    /* Clear global pointer if it's us */
-    if (g_bog_state == state) {
-        g_bog_state = NULL;
-    }
 
     /* Stop scheduler */
     if (state->scheduler && state->running) {
@@ -363,9 +266,6 @@ static int bog_lang_eval(editor_ctx_t *ctx, const char *code) {
     if (!code || !*code) {
         return 0;  /* Empty code is success */
     }
-
-    /* Ensure global state is set for callbacks */
-    g_bog_state = state;
 
     /* Parse the program */
     char *error_msg = NULL;

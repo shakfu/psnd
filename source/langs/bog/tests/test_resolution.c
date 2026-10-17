@@ -335,6 +335,95 @@ TEST(resolution_handles_is_builtin)
     TEST_PASS();
 }
 
+/* Resolve the body of "__q :- BODY." against program_src */
+static BogSolutions run_query(const char* program_src, const char* query_src)
+{
+    BogArena* arena = bog_arena_create();
+    BogBuiltins* builtins = bog_create_builtins(arena);
+    char* error = NULL;
+    BogProgram* program = bog_parse_program(program_src, arena, &error);
+    free(error);
+    error = NULL;
+    BogProgram* query = bog_parse_program(query_src, arena, &error);
+    free(error);
+    BogContext ctx;
+    ctx.bpm = 120.0;
+    ctx.state_manager = NULL;
+    BogEnv env;
+    bog_env_init(&env);
+    BogSolutions solutions = { 0 };
+    bog_resolve(&query->clauses[0].body, &env, program, &ctx, builtins,
+                &solutions, arena);
+    bog_env_free(&env);
+    bog_arena_destroy(arena);
+    return solutions;
+}
+
+static void free_solutions(BogSolutions* solutions)
+{
+    for (size_t i = 0; i < solutions->count; i++)
+        bog_env_free(&solutions->envs[i]);
+    free(solutions->envs);
+    free(solutions->source_lines);
+}
+
+TEST(resolution_stops_self_recursive_clause)
+{
+    BogSolutions s = run_query(
+        "event(V, P, X, T) :- event(V, P, X, T).",
+        "__q :- event(V, P, X, 1.0).");
+    ASSERT_EQ(s.count, 0);
+    ASSERT_TRUE(s.truncated);
+    free_solutions(&s);
+    TEST_PASS();
+}
+
+TEST(resolution_stops_runaway_search)
+{
+    /* 10^5 combinations, none succeeds: only the step limit ends it */
+    BogSolutions s = run_query(
+        "d(0). d(1). d(2). d(3). d(4). d(5). d(6). d(7). d(8). d(9).",
+        "__q :- d(A), d(B), d(C), d(D), d(E), A > 9.");
+    ASSERT_EQ(s.count, 0);
+    ASSERT_TRUE(s.truncated);
+    free_solutions(&s);
+    TEST_PASS();
+}
+
+TEST(resolution_caps_solution_count)
+{
+    BogSolutions s = run_query(
+        "d(0). d(1). d(2). d(3). d(4). d(5). d(6). d(7). d(8). d(9).",
+        "__q :- d(A), d(B), d(C), d(D).");
+    ASSERT_EQ(s.count, BOG_MAX_SOLUTIONS);
+    ASSERT_TRUE(s.truncated);
+    free_solutions(&s);
+    TEST_PASS();
+}
+
+TEST(resolution_allows_bounded_recursion)
+{
+    BogSolutions s = run_query(
+        "count(0). count(N) :- N > 0, M is N - 1, count(M).",
+        "__q :- count(100).");
+    ASSERT_EQ(s.count, 1);
+    ASSERT_FALSE(s.truncated);
+    free_solutions(&s);
+    TEST_PASS();
+}
+
+TEST(resolution_exhausted_negation_does_not_succeed)
+{
+    /* \+ over a runaway goal must not prove the negation */
+    BogSolutions s = run_query(
+        "loop :- loop.",
+        "__q :- \\+ loop.");
+    ASSERT_EQ(s.count, 0);
+    ASSERT_TRUE(s.truncated);
+    free_solutions(&s);
+    TEST_PASS();
+}
+
 int main(void)
 {
     printf("Resolution Tests\n");
@@ -346,6 +435,11 @@ int main(void)
     RUN_TEST(resolution_handles_conjunctive_goals);
     RUN_TEST(resolution_tracks_source_lines);
     RUN_TEST(resolution_handles_is_builtin);
+    RUN_TEST(resolution_stops_self_recursive_clause);
+    RUN_TEST(resolution_stops_runaway_search);
+    RUN_TEST(resolution_caps_solution_count);
+    RUN_TEST(resolution_allows_bounded_recursion);
+    RUN_TEST(resolution_exhausted_negation_does_not_succeed);
 
     TEST_SUMMARY();
     return TEST_EXIT_CODE();
