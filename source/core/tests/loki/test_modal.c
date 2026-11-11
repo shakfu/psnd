@@ -389,6 +389,62 @@ TEST(modal_visual_y_yanks) {
     editor_ctx_free(&ctx);
 }
 
+/* d yanks, then deletes. The yank clears the selection on success, which
+ * used to leave delete_selection() nothing to delete. */
+TEST(modal_visual_d_deletes_selection) {
+    editor_ctx_t ctx;
+    init_simple_ctx(&ctx, "hello world");
+
+    ctx.view.mode = MODE_VISUAL;
+    ctx.view.sel_active = 1;
+    ctx.view.sel_start_x = 0;
+    ctx.view.sel_start_y = 0;
+    ctx.view.sel_end_x = 5;
+    ctx.view.sel_end_y = 0;
+
+    modal_process_visual_mode_key(&ctx, 0, 'd');
+
+    ASSERT_STR_EQ(ctx.model.row[0].chars, " world");
+    ASSERT_EQ(ctx.view.mode, MODE_NORMAL);
+    ASSERT_FALSE(ctx.view.sel_active);
+    ASSERT_STR_EQ(ctx.view.statusmsg, "Deleted 5 characters");
+
+    editor_ctx_free(&ctx);
+}
+
+/* The same through the keys a user types: v, l, l, d. */
+TEST(modal_visual_v_l_l_d_deletes) {
+    editor_ctx_t ctx;
+    init_simple_ctx(&ctx, "hello");
+
+    modal_process_normal_mode_key(&ctx, 0, 'v');
+    modal_process_visual_mode_key(&ctx, 0, 'l');
+    modal_process_visual_mode_key(&ctx, 0, 'l');
+    modal_process_visual_mode_key(&ctx, 0, 'd');
+
+    ASSERT_STR_EQ(ctx.model.row[0].chars, "llo");   /* end is exclusive */
+    ASSERT_EQ(ctx.view.mode, MODE_NORMAL);
+
+    editor_ctx_free(&ctx);
+}
+
+/* With no active selection, d must not delete stale selection coordinates. */
+TEST(modal_visual_d_without_selection_keeps_text) {
+    editor_ctx_t ctx;
+    init_simple_ctx(&ctx, "hello");
+
+    ctx.view.mode = MODE_VISUAL;
+    ctx.view.sel_active = 0;
+    ctx.view.sel_start_x = 0;
+    ctx.view.sel_end_x = 3;
+
+    modal_process_visual_mode_key(&ctx, 0, 'd');
+
+    ASSERT_STR_EQ(ctx.model.row[0].chars, "hello");
+
+    editor_ctx_free(&ctx);
+}
+
 TEST(modal_visual_selection_highlighting) {
     editor_ctx_t ctx;
     init_simple_ctx(&ctx, "hello world");
@@ -547,6 +603,9 @@ BEGIN_TEST_SUITE("Modal Editing")
     RUN_TEST(modal_visual_l_extends_right);
     RUN_TEST(modal_visual_esc_returns_normal);
     RUN_TEST(modal_visual_y_yanks);
+    RUN_TEST(modal_visual_d_deletes_selection);
+    RUN_TEST(modal_visual_v_l_l_d_deletes);
+    RUN_TEST(modal_visual_d_without_selection_keeps_text);
     RUN_TEST(modal_visual_selection_highlighting);
 
     /* Mode transitions */

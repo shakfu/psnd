@@ -52,6 +52,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Fixed
 
+- **Visual `d` deleted nothing**: it yanks before deleting, and a successful copy clears the selection, so `delete_selection()` found none. In a terminal the OSC 52 copy always succeeds, so `d` never deleted. The selection is now kept across the yank; visual `x` was unaffected.
+
 - **Bog recursion was broken, and a self-recursive clause crashed the process**: the resolver restarted clause renaming at 0 on every call, so each recursion level reused the variable names of the level above. `count(N) :- N > 0, M is N-1, count(M).` failed beyond one level. `event(V,P,X,T) :- event(V,P,X,T).` bound a variable to itself, and substitution then recursed until the stack overflowed. Renaming is now per query. Queries also stop at `BOG_MAX_DEPTH` (512), `BOG_MAX_STEPS` (20000) or `BOG_MAX_SOLUTIONS` (1024) and set `BogSolutions.truncated`. A runaway query costs at most about 40 ms.
 
 - **Bog's random builtins shared the C library stream**: `prob`, `pick`, `rand` and `randint` used `rand()`, which was never seeded. Every launch played the same sequence, and Joy's `srand` or MHS's FFI changed what Bog played. Each `BogStateManager` now owns a clock-seeded stream; `bog_state_manager_seed` makes a run repeatable.

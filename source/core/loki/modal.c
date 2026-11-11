@@ -657,8 +657,12 @@ static void process_visual_mode(editor_ctx_t *ctx, int fd, int c) {
 
         /* Delete selection (yank first for 'd', just delete for 'x') */
         case 'd':
-            copy_selection_to_clipboard(ctx); /* Save to clipboard first (yank) */
             {
+                /* Yank first. A successful copy clears the selection, which
+                 * the delete still needs. */
+                int had_selection = ctx->view.sel_active;
+                copy_selection_to_clipboard(ctx);
+                ctx->view.sel_active = had_selection;
                 int deleted = delete_selection(ctx);
                 editor_set_status_msg(ctx, "Deleted %d characters", deleted);
             }
