@@ -161,6 +161,7 @@ void editor_ctx_free(editor_ctx_t *ctx) {
         free(ctx->model.row[i].hl);
     }
     free(ctx->model.row);
+    search_free(ctx);
 
     /* Free filename */
     free(ctx->model.filename);
@@ -1016,8 +1017,8 @@ static void editor_refresh_screen_via_renderer(editor_ctx_t *ctx) {
     r->render_status(r, &status_info, ctx->view.screencols);
 
     /* Render message line */
-    const char *msg = NULL;
-    if (ctx->view.statusmsg[0] && time(NULL) - ctx->view.statusmsg_time < 5) {
+    const char *msg = search_prompt(ctx);  /* stays while searching */
+    if (!msg && ctx->view.statusmsg[0] && time(NULL) - ctx->view.statusmsg_time < 5) {
         msg = ctx->view.statusmsg;
     }
     r->render_message(r, msg, ctx->view.screencols);
@@ -1319,8 +1320,11 @@ void editor_refresh_screen(editor_ctx_t *ctx) {
 
     /* Second row depends on ctx->view.statusmsg and the status message update time. */
     terminal_buffer_append(&ab,"\x1b[0K",4);
-    int msglen = strlen(ctx->view.statusmsg);
-    if (msglen && time(NULL)-ctx->view.statusmsg_time < 5)
+    const char *pending = search_prompt(ctx);  /* stays while searching */
+    int msglen = (int)strlen(pending ? pending : ctx->view.statusmsg);
+    if (pending)
+        terminal_buffer_append(&ab,pending,msglen <= ctx->view.screencols ? msglen : ctx->view.screencols);
+    else if (msglen && time(NULL)-ctx->view.statusmsg_time < 5)
         terminal_buffer_append(&ab,ctx->view.statusmsg,msglen <= ctx->view.screencols ? msglen : ctx->view.screencols);
 
     /* Render REPL if active */

@@ -340,6 +340,9 @@ static void process_normal_mode(editor_ctx_t *ctx, int fd, int c) {
 
     switch(c) {
         case 'h': editor_move_cursor(ctx, ARROW_LEFT); break;
+        case '/': search_begin(ctx); break;
+        case 'n': search_repeat(ctx, 1); break;
+        case 'N': search_repeat(ctx, -1); break;
         case 'j': editor_move_cursor(ctx, ARROW_DOWN); break;
         case 'k': editor_move_cursor(ctx, ARROW_UP); break;
         case 'l': editor_move_cursor(ctx, ARROW_RIGHT); break;
@@ -429,11 +432,7 @@ static void process_normal_mode(editor_ctx_t *ctx, int fd, int c) {
 
         /* Global commands (work in all modes) */
         case CTRL_S: editor_save(ctx); break;
-        case CTRL_F:
-            /* Find requires terminal I/O - handled by modal_process_keypress().
-             * From non-terminal sources (modal_process_event), this is a no-op. */
-            if (fd != 0) editor_find(ctx, fd);
-            break;
+        case CTRL_F: search_begin(ctx); break;
         case CTRL_L:
             /* Toggle REPL */
             if (ctx_repl(ctx)) {
@@ -522,11 +521,7 @@ static void process_insert_mode(editor_ctx_t *ctx, int fd, int c) {
 
         /* Global commands */
         case CTRL_S: editor_save(ctx); break;
-        case CTRL_F:
-            /* Find requires terminal I/O - handled by modal_process_keypress().
-             * From non-terminal sources (modal_process_event), this is a no-op. */
-            if (fd != 0) editor_find(ctx, fd);
-            break;
+        case CTRL_F: search_begin(ctx); break;
         /* CTRL_W is now a prefix key for window commands, handled in modal_process_event */
         case CTRL_L:
             /* Toggle REPL */
@@ -695,9 +690,6 @@ static void process_visual_mode(editor_ctx_t *ctx, int fd, int c) {
  * This is the terminal-specific entry point for keyboard input.
  * It reads a key from the terminal and delegates to modal_process_event().
  *
- * Terminal-specific operations (like interactive find via Ctrl-F) are
- * intercepted here and handled with the real fd before delegation.
- *
  * For non-terminal input sources, use modal_process_event() directly.
  */
 int modal_process_keypress(editor_ctx_t *ctx, int fd) {
@@ -720,17 +712,6 @@ int modal_process_keypress(editor_ctx_t *ctx, int fd) {
         EditorEvent ev = event_from_keycode(c);
         modal_process_event(ctx, &ev);
         return 0;
-    }
-
-    /* Intercept CTRL_F for interactive find (requires terminal I/O).
-     * This must be done before delegation because editor_find() has
-     * its own event loop that reads from the terminal. */
-    if (c == CTRL_F) {
-        t_lua_repl *repl = ctx_repl(ctx);
-        if (!repl || !repl->active) {
-            editor_find(ctx, fd);
-            return 0;
-        }
     }
 
     /* Convert keypress to event and delegate to event handler */
@@ -1072,9 +1053,6 @@ static int handle_ctrl_w_command(editor_ctx_t *ctx, int c) {
  * - First Ctrl-X sets pending_prefix = CTRL_X
  * - Next event completes the sequence (e.g., 'n' -> next buffer)
  *
- * Note: Interactive operations like editor_find() require terminal I/O.
- * When called from non-terminal sources (fd=0), these are skipped.
- * Use modal_process_keypress() for full terminal functionality.
  */
 void modal_process_event(editor_ctx_t *ctx, const EditorEvent *event) {
     if (!ctx || !event) return;
@@ -1158,6 +1136,9 @@ void modal_process_event(editor_ctx_t *ctx, const EditorEvent *event) {
     /* Convert event to legacy keycode for existing handlers */
     int c = event_to_keycode(event);
     if (c == 0) return;
+
+    /* An active search takes every key until ESC or ENTER. */
+    if (search_handle_key(ctx, c)) return;
 
     /* The quit counter lives on the context (ctx->view.quit_times). It used
      * to be a function-level static, shared by every editor context and never

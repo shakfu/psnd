@@ -201,6 +201,18 @@ typedef struct EditorView {
     int pending_prefix;       /* Pending prefix key (e.g., CTRL_X for Ctrl-X sequences), 0 if none */
     int quit_times;           /* Remaining Ctrl-Q presses needed to quit a dirty buffer */
 
+    /* Incremental search (search.c); keys go to it while active */
+    struct {
+        int active;
+        char query[KILO_QUERY_LEN + 1];
+        int qlen;
+        int match_row, match_col; /* current match (file row, chars index), -1 for none */
+        int saved_cx, saved_cy, saved_coloff, saved_rowoff;
+        int saved_hl_line;        /* row whose hl is in saved_hl, -1 for none */
+        char *saved_hl;
+        int saved_hl_len;
+    } search;
+
     /* Status */
     char statusmsg[80];       /* Status message */
     time_t statusmsg_time;    /* Status message timestamp */
@@ -392,9 +404,5 @@ void modal_process_visual_mode_key(editor_ctx_t *ctx, int fd, int c);
 void editor_update_syntax(editor_ctx_t *ctx, t_erow *row);
 void editor_update_row(editor_ctx_t *ctx, t_erow *row);
 
-/* Search test functions - for testing only
- * These functions expose internal search logic for unit testing.
- * They should not be used in production code. */
-int editor_find_next_match(editor_ctx_t *ctx, const char *query, int start_row, int direction, int *match_offset);
 
 #endif /* LOKI_INTERNAL_H */

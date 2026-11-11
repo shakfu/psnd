@@ -9,6 +9,7 @@
 #include "lang_bridge.h"
 #include "selection.h"
 #include "modal.h"
+#include "search.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -74,7 +75,6 @@ const char *keybind_get_command(int keycode) {
 
 /* Forward declarations for editor functions */
 int editor_save(editor_ctx_t *ctx);
-void editor_find(editor_ctx_t *ctx, int fd);
 void editor_update_repl_layout(editor_ctx_t *ctx);
 void copy_selection_to_clipboard(editor_ctx_t *ctx);
 int buffer_create(const char *filename);
@@ -89,11 +89,10 @@ static int cmd_save(editor_ctx_t *ctx, int fd) {
 
 /* Note: quit is handled specially in modal.c due to multi-press confirmation */
 
-/* Command: find */
+/* Command: find (keys then reach search through modal_process_event) */
 static int cmd_find(editor_ctx_t *ctx, int fd) {
-    if (fd != 0) {
-        editor_find(ctx, fd);
-    }
+    (void)fd;
+    search_begin(ctx);
     return 1;
 }
 

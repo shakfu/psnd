@@ -28,6 +28,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Changed
 
+- **Editor search is event-driven, ported from loki**: search state lives on the view, and `modal_process_event()` sends keys to it while active. Search used to run its own loop reading a terminal fd, so `Ctrl-F` did nothing in the web host or any other session client, including through the `find` keybinding. The prompt now also reaches the session view model. Background Lua can edit rows mid-search, so the match highlight is restored from a copy, clipped to the row's current length. `search.c` and `search.h` are again identical to loki's (`make check-sync` in loki).
+
+- **`/`, `n` and `N` in NORMAL mode**: `/` opens the same incremental search as `Ctrl-F`. `n` / `N` jump to the next / previous match of the last query accepted with Enter, wrapping at the file ends; the status line shows `/query` or `?query`, with `(wrapped)` when it wrapped. The last query is shared by all buffers.
+
+- **Search starts at the cursor and lands on the right column after tabs**: search used to take the first match in the file, and it set the cursor column from the rendered row, so on a line with tabs the cursor landed up to 7 columns right of the match. It now finds the first match after the cursor, wrapping at the ends, like vim. Arrows step match by match rather than row by row. A query with no match returns the cursor to where the search began. The view scrolls only when the match is off screen.
+
 - **26 editor-core files are now byte-identical with [loki](https://github.com/shakfu/loki)**: `json`, `undo`, `selection`, `search`, `indent`, `jsonrpc`, `host`, `command/{file,goto,substitute}.c`, `terminal_posix.c` and others. loki's `make check-sync` reports drift. Changes to these files should stay free of psnd-specific code.
 
 - **Stricter JSON parsing**: `json_parse` now rejects trailing content, literals with a suffix (`trueX`) and a bare `-`. Integer overflow saturates to `INT_MAX`.

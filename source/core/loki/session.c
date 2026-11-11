@@ -14,6 +14,7 @@
 #include "loki/link.h"
 #include "loki/lua.h"
 #include "syntax.h"
+#include "search.h"
 #include "shared/context.h"
 #include "shared/osc/osc.h"
 #include <stdlib.h>
@@ -445,8 +446,11 @@ EditorViewModel *editor_session_snapshot(EditorSession *session) {
     vm->status.playing = loki_lang_is_playing(ctx);
     vm->status.link_active = link_active;
 
-    /* Message line */
-    if (ctx->view.statusmsg[0] && time(NULL) - ctx->view.statusmsg_time < 5) {
+    /* Message line; the search prompt stays while searching */
+    const char *prompt = search_prompt(ctx);
+    if (prompt) {
+        vm->message = safe_strdup(prompt);
+    } else if (ctx->view.statusmsg[0] && time(NULL) - ctx->view.statusmsg_time < 5) {
         vm->message = safe_strdup(ctx->view.statusmsg);
     }
 
